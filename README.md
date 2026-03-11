@@ -37,7 +37,7 @@ Benchmarked on *Listeria monocytogenes* cgMLST (1748 loci) from the [BeONE](http
 
 CRC32-hashed allelic profiles: **99.99% identical** (174785/174800 cells). The 15 differences are due to CDS prediction differences (pyrodigal vs prodigal), not the allele calling algorithm.
 
-### All BeONE organisms (8 threads, 100/N genomes)
+### All BeONE organisms (CPU only, 8 threads, 100/N genomes)
 
 Benchmark run on 100 randomly selected genomes from each [BeONE](https://onehealthejp.eu/projects/foodborne-zoonoses/jrp-beone) dataset (total available in parentheses). Genome assemblies from Zenodo: [Lm](https://zenodo.org/records/7802702), [Se](https://zenodo.org/records/7802723), [Ec](https://zenodo.org/records/7802728), [Cj](https://zenodo.org/records/7802717). Schemas from [Chewie-NS](https://chewbbaca.online/).
 
@@ -204,6 +204,7 @@ However, in real-time surveillance scenarios — where hundreds or thousands of 
 
 - **AlleleCall only** — chewBBACA-rs reimplements only the `AlleleCall` module. Schema creation (`CreateSchema`), schema evaluation, and other chewBBACA modules are not included. Use the original chewBBACA for these tasks.
 - **CDS prediction** — chewBBACA-rs does not include a built-in gene predictor. CDS must be pre-computed using the included `predict_cds.py` script (based on [pyrodigal](https://github.com/althonos/pyrodigal)). Minor differences between pyrodigal and prodigal may cause a small number of classification differences (~0.01%).
+- **Read-only schema** — unlike chewBBACA mode 4, chewBBACA-rs does **not** update the schema in place. Novel alleles (INF) are written to `novel_alleles.fasta` in the output directory but are not appended to the schema FASTA files. This means INF alleles discovered during a run are not available as references for subsequent genomes within the same run.
 - **Schema format** — reads standard chewBBACA FASTA schemas but does not read/write pickle caches. Hash tables and mode lengths are recomputed from FASTA files at startup.
 - **GPU mode** — experimental CUDA support is included but not yet production-ready for very large batches.
 - **Not a fork** — this is an independent reimplementation, not a fork of the original Python codebase. Bugs or edge cases not covered by the BeONE validation datasets may exist.
