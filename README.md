@@ -37,14 +37,16 @@ Benchmarked on *Listeria monocytogenes* cgMLST (1748 loci) from the [BeONE](http
 
 CRC32-hashed allelic profiles: **99.99% identical** (174785/174800 cells). The 15 differences are due to CDS prediction differences (pyrodigal vs prodigal), not the allele calling algorithm.
 
-### All BeONE organisms (8 threads, 100 genomes each)
+### All BeONE organisms (8 threads, 100/N genomes)
 
-| Organism | Loci | Schema | Python | Rust | Speedup | CRC32 match |
-|----------|------|--------|--------|------|---------|-------------|
-| *L. monocytogenes* | 1748 | cgMLST | 57.6s | 4.6s | **12.5x** | 99.95% |
-| *S. enterica* | 8558 | wgMLST | 226.7s | 12.9s | **17.6x** | 99.79% |
-| *E. coli* | 7601 | wgMLST | 390.2s | 29.9s | **13.0x** | 99.84% |
-| *C. jejuni* | 2794 | wgMLST | 101.4s | 7.9s | **12.9x** | 99.91% |
+Benchmark run on 100 randomly selected genomes from each [BeONE](https://onehealthejp.eu/projects/foodborne-zoonoses/jrp-beone) dataset (total available in parentheses). Genome assemblies from Zenodo: [Lm](https://zenodo.org/records/7802702), [Se](https://zenodo.org/records/7802723), [Ec](https://zenodo.org/records/7802728), [Cj](https://zenodo.org/records/7802717). Schemas from [Chewie-NS](https://chewbbaca.online/).
+
+| Organism | Genomes (total) | Loci | Schema | Python | Rust | Speedup | CRC32 match |
+|----------|-----------------|------|--------|--------|------|---------|-------------|
+| *L. monocytogenes* | 100 (1426) | 1748 | cgMLST | 57.6s | 4.6s | **12.5x** | 99.95% |
+| *S. enterica* | 100 (1540) | 8558 | wgMLST | 226.7s | 12.9s | **17.6x** | 99.79% |
+| *E. coli* | 100 (308) | 7601 | wgMLST | 390.2s | 29.9s | **13.0x** | 99.84% |
+| *C. jejuni* | 100 (610) | 2794 | wgMLST | 101.4s | 7.9s | **12.9x** | 99.91% |
 
 ### Why CRC32 match is not 100%
 
