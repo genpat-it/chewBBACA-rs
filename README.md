@@ -41,12 +41,18 @@ CRC32-hashed allelic profiles: **99.99% identical** (174785/174800 cells). The 1
 
 | Organism | Loci | Schema | Python | Rust | Speedup | CRC32 match |
 |----------|------|--------|--------|------|---------|-------------|
-| *L. monocytogenes* | 1748 | cgMLST | 57.6s | 4.6s | **12.5x** | 99.99% |
-| *S. enterica* | 8558 | wgMLST | 227.9s | 13.1s | **17.4x** | 99.78% |
-| *E. coli* | 7601 | wgMLST | 393.4s | 33.7s | **11.7x** | — |
-| *C. jejuni* | 2794 | wgMLST | 102.3s | 9.7s | **10.5x** | — |
+| *L. monocytogenes* | 1748 | cgMLST | 57.6s | 4.6s | **12.5x** | 99.95% |
+| *S. enterica* | 8558 | wgMLST | 226.7s | 12.9s | **17.6x** | 99.79% |
+| *E. coli* | 7601 | wgMLST | 390.2s | 29.9s | **13.0x** | 99.84% |
+| *C. jejuni* | 2794 | wgMLST | 101.4s | 7.9s | **12.9x** | 99.91% |
 
-CRC32 match percentages reflect differences in CDS prediction (pyrodigal vs prodigal used by Python chewBBACA), not in the allele calling algorithm itself.
+### Why CRC32 match is not 100%
+
+The CRC32-hashed profiles are not perfectly identical because the two implementations use **different CDS predictors**: chewBBACA-rs uses pre-computed CDS from [pyrodigal](https://github.com/althonos/pyrodigal) (a Cython reimplementation of Prodigal), while Python chewBBACA calls the original [Prodigal](https://github.com/hyattpd/Prodigal) binary. Although both implement the same gene-finding algorithm, minor numerical differences in their dynamic programming implementations lead to slightly different CDS predictions on some genomes — different start codons, different ORFs found or missed.
+
+These CDS prediction differences propagate to the allele calling output: a CDS that is predicted by one tool but not the other will result in a different classification for that locus (typically LNF vs EXC/INF). The allele calling algorithm itself is deterministic and produces identical results when given the same CDS input.
+
+The effect is more pronounced in wgMLST schemas (Se, Ec, Cj) because they include thousands of accessory loci that are borderline for CDS prediction, while cgMLST schemas (Lm) are restricted to highly conserved core genes where pyrodigal and Prodigal almost always agree.
 
 ## Installation
 
