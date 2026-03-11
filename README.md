@@ -219,4 +219,4 @@ GPL-3.0 — same as the original [chewBBACA](https://github.com/B-UMMI/chewBBACA
 
 ## Authors
 
-Antonio De Ruvo — [Istituto Zooprofilattico Sperimentale del Lazio e della Toscana](https://www.izslt.it/)
+GenPat Team — [Istituto Zooprofilattico Sperimentale dell'Abruzzo e del Molise](https://www.izs.it/)
