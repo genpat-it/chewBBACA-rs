@@ -266,38 +266,44 @@ pub fn align_pairs_gpu(
         pair_rep_idx,
     ).expect("GPU alignment failed");
 
-    // Find best per protein
-    let mut best_per_protein: FxHashMap<usize, (i32, usize, u32, u32)> = FxHashMap::default();
+    // Find best per protein: (score, rep_i)
+    let mut best_per_protein: FxHashMap<usize, (i32, usize)> = FxHashMap::default();
 
     for (pair_i, res) in gpu_results.iter().enumerate() {
         let prot_i = pair_protein_idx[pair_i];
         let rep_i = pair_rep_idx[pair_i];
-        let score = res.score as i32;
+        let score = res.score;
 
-        let entry = best_per_protein.entry(prot_i).or_insert((0, 0, 0, 0));
+        let entry = best_per_protein.entry(prot_i).or_insert((0, 0));
         if score > entry.0 {
-            *entry = (score, rep_i, res.query_start, res.query_end);
+            *entry = (score, rep_i);
         }
     }
 
+    // For each best match, get full positions via parasail reverse alignment
     let mut results = Vec::new();
-    for (prot_i, (score, rep_i, qstart, qend)) in best_per_protein {
+    for (prot_i, (score, rep_i)) in best_per_protein {
         if score <= 0 { continue; }
         let self_score = representatives[rep_i].self_score;
         if self_score <= 0.0 { continue; }
         let bsr = score as f64 / self_score;
         let (cds_idx, protein) = &proteins[prot_i];
 
+        // Get full positions (target_start/end) via parasail for best match only
+        let (_, _, _, target_start, target_end) = crate::parasail_ffi::sw_simd_full(
+            protein, &representatives[rep_i].protein_seq
+        );
+
         results.push(ClusterResult {
             cds_idx: *cds_idx,
             best_locus: representatives[rep_i].locus_idx,
             best_bsr: bsr,
             score,
-            query_start: qstart,
-            query_end: qend,
+            query_start: 0,
+            query_end: 0,
             query_len: protein.len() as u32,
-            target_start: 0, // GPU kernel doesn't track target positions yet
-            target_end: 0,
+            target_start,
+            target_end,
             target_len: representatives[rep_i].protein_seq.len() as u32,
         });
     }
@@ -306,6 +312,8 @@ pub fn align_pairs_gpu(
 }
 
 /// GPU-accelerated version: cluster first, then batch all SW pairs to GPU.
+/// GPU computes scores to find the best match, then parasail CPU computes
+/// exact target positions for the best match only (for PLOT3/PLOT5 classification).
 pub fn cluster_and_align_gpu(
     proteins: &[(usize, Vec<u8>)],
     representatives: &[Representative],
@@ -333,7 +341,7 @@ pub fn cluster_and_align_gpu(
 
     eprintln!("  GPU: {} alignment pairs from {} proteins", pair_protein_idx.len(), proteins.len());
 
-    // Phase 2: Batch SW on GPU using indexed alignment (zero-copy)
+    // Phase 2: Batch SW on GPU — scores only, to find best match per protein
     let query_slices: Vec<&[u8]> = proteins.iter().map(|(_, p)| p.as_slice()).collect();
     let target_slices: Vec<&[u8]> = representatives.iter().map(|r| r.protein_seq.as_slice()).collect();
 
@@ -344,39 +352,43 @@ pub fn cluster_and_align_gpu(
         &pair_rep_idx,
     ).expect("GPU alignment failed");
 
-    // Phase 3: Find best per protein
-    let mut best_per_protein: FxHashMap<usize, (i32, usize, u32, u32)> = FxHashMap::default();
+    // Phase 3: Find best per protein: (score, rep_i)
+    let mut best_per_protein: FxHashMap<usize, (i32, usize)> = FxHashMap::default();
 
     for (pair_i, res) in gpu_results.iter().enumerate() {
         let prot_i = pair_protein_idx[pair_i];
         let rep_i = pair_rep_idx[pair_i];
-        let score = res.score as i32;
+        let score = res.score;
 
-        let entry = best_per_protein.entry(prot_i).or_insert((0, 0, 0, 0));
+        let entry = best_per_protein.entry(prot_i).or_insert((0, 0));
         if score > entry.0 {
-            *entry = (score, rep_i, res.query_start, res.query_end);
+            *entry = (score, rep_i);
         }
     }
 
-    // Phase 4: Build results
+    // Phase 4: Get exact target positions via parasail (CPU) for best match only
     let mut results = Vec::new();
-    for (prot_i, (score, rep_i, qstart, qend)) in best_per_protein {
+    for (prot_i, (score, rep_i)) in best_per_protein {
         if score <= 0 { continue; }
         let self_score = representatives[rep_i].self_score;
         if self_score <= 0.0 { continue; }
         let bsr = score as f64 / self_score;
         let (cds_idx, protein) = &proteins[prot_i];
 
+        let (_, _, _, target_start, target_end) = crate::parasail_ffi::sw_simd_full(
+            protein, &representatives[rep_i].protein_seq
+        );
+
         results.push(ClusterResult {
             cds_idx: *cds_idx,
             best_locus: representatives[rep_i].locus_idx,
             best_bsr: bsr,
             score,
-            query_start: qstart,
-            query_end: qend,
+            query_start: 0,
+            query_end: 0,
             query_len: protein.len() as u32,
-            target_start: 0, // GPU kernel doesn't track target positions yet
-            target_end: 0,
+            target_start,
+            target_end,
             target_len: representatives[rep_i].protein_seq.len() as u32,
         });
     }
