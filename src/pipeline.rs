@@ -120,6 +120,7 @@ pub fn run_allele_call(
                 config.translation_table,
                 &config.prodigal_mode,
                 training_file.as_deref(),
+                &config.prodigal_path,
             );
 
             // Fill contig lengths

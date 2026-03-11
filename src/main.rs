@@ -68,6 +68,10 @@ struct Cli {
     /// Use GPU (CUDA) for Smith-Waterman alignment
     #[arg(long)]
     gpu: bool,
+
+    /// Path to prodigal binary (default: "prodigal" in PATH)
+    #[arg(long)]
+    prodigal_path: Option<PathBuf>,
 }
 
 fn main() {
@@ -87,6 +91,9 @@ fn main() {
         cpu_cores: cli.cpu,
         prodigal_mode: cli.prodigal_mode,
         use_gpu: cli.gpu,
+        prodigal_path: cli.prodigal_path
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|| "prodigal".to_string()),
     };
 
     // Discover genome files

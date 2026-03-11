@@ -144,6 +144,7 @@ pub struct Config {
     pub cpu_cores: usize,
     pub prodigal_mode: String,     // "single" or "meta"
     pub use_gpu: bool,             // use CUDA GPU for SW alignment
+    pub prodigal_path: String,     // path to prodigal binary
 }
 
 impl Default for Config {
@@ -156,6 +157,7 @@ impl Default for Config {
             cpu_cores: 1,
             prodigal_mode: "single".to_string(),
             use_gpu: false,
+            prodigal_path: "prodigal".to_string(),
         }
     }
 }

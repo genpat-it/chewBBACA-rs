@@ -44,6 +44,7 @@ pub fn predict_cds(
     translation_table: u8,
     prodigal_mode: &str,
     training_file: Option<&Path>,
+    prodigal_path: &str,
 ) -> (Vec<Cds>, u32) {
     let mut args = vec![
         "-i".to_string(), genome_path.to_str().unwrap().to_string(),
@@ -60,10 +61,13 @@ pub fn predict_cds(
         args.push(trn.to_str().unwrap().to_string());
     }
 
-    let output = Command::new("prodigal")
+    let output = Command::new(prodigal_path)
         .args(&args)
         .output()
-        .expect("Failed to run prodigal. Is it installed?");
+        .unwrap_or_else(|e| panic!(
+            "Failed to run prodigal at '{}': {}. Use --prodigal-path to specify the correct path.",
+            prodigal_path, e
+        ));
 
     if !output.status.success() {
         eprintln!("Prodigal failed for {}: {}",
