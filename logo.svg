@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="120" height="120">
+  <!-- Flat rounded square background -->
+  <rect x="4" y="4" width="112" height="112" rx="24" fill="#2563eb"/>
+
+  <!-- Minimal DNA strand: two offset sine curves -->
+  <path d="M 30 38 Q 45 28, 60 38 Q 75 48, 90 38" fill="none" stroke="#ffffff" stroke-width="3.5" stroke-linecap="round"/>
+  <path d="M 30 48 Q 45 58, 60 48 Q 75 38, 90 48" fill="none" stroke="#93c5fd" stroke-width="3.5" stroke-linecap="round"/>
+
+  <!-- Rungs -->
+  <line x1="45" y1="33" x2="45" y2="53" stroke="#ffffff" stroke-width="2" stroke-linecap="round" opacity="0.4"/>
+  <line x1="60" y1="38" x2="60" y2="48" stroke="#ffffff" stroke-width="2" stroke-linecap="round" opacity="0.4"/>
+  <line x1="75" y1="33" x2="75" y2="53" stroke="#ffffff" stroke-width="2" stroke-linecap="round" opacity="0.4"/>
+
+  <!-- "cc" text (chewcall initials) -->
+  <text x="60" y="88" font-family="system-ui, -apple-system, sans-serif" font-size="32" font-weight="700"
+        fill="#ffffff" text-anchor="middle" dominant-baseline="middle" letter-spacing="-1">cc</text>
+</svg>

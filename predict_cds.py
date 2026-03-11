@@ -16,7 +16,8 @@ def predict_genome(genome_path, training_info, translation_table, output_dir):
     genome_name = Path(genome_path).stem
     output_file = os.path.join(output_dir, f"{genome_name}.cds.fasta")
 
-    orf_finder = pyrodigal.GeneFinder(meta=False, training_info=training_info)
+    orf_finder = pyrodigal.GeneFinder(meta=False, closed=True, mask=True,
+                                      training_info=training_info)
 
     records = list(SeqIO.parse(genome_path, "fasta"))
     contig_lengths = {rec.id: len(rec.seq) for rec in records}

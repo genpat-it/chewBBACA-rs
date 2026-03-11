@@ -132,27 +132,56 @@ fn size_classification(
 
 /// Resolve multiple matches for the same genome+locus pair.
 /// Returns the final classification when there are multiple hits.
+/// Matches Python chewBBACA's logic from allele_call.py lines 290-318.
 pub fn resolve_multi_match(classes: &[Classification]) -> Classification {
     if classes.len() <= 1 {
         return classes.first().copied().unwrap_or(Classification::LNF);
     }
 
-    let all_same = classes.iter().all(|c| *c == classes[0]);
+    // Count each classification type
+    let mut exc_count = 0u32;
+    let mut inf_count = 0u32;
+    let mut has_plot = false;
+    let mut distinct_classes = Vec::new();
 
-    if all_same {
-        match classes[0] {
-            Classification::EXC => Classification::NIPHEM,
-            _ => Classification::NIPH,
+    for &c in classes {
+        match c {
+            Classification::EXC => exc_count += 1,
+            Classification::INF => inf_count += 1,
+            Classification::PLOT3 | Classification::PLOT5 | Classification::LOTSC => has_plot = true,
+            _ => {}
+        }
+        if !distinct_classes.contains(&c) {
+            distinct_classes.push(c);
+        }
+    }
+
+    if distinct_classes.len() == 1 {
+        // Multiple matches, single class
+        if classes[0] == Classification::EXC {
+            Classification::NIPHEM
+        } else {
+            Classification::NIPH
         }
     } else {
-        // Mixed classes
-        let has_exc = classes.iter().any(|c| *c == Classification::EXC);
-        let has_inf = classes.iter().any(|c| *c == Classification::INF);
-
-        if has_exc && has_inf && classes.len() == 2 {
-            // One EXC + one INF: keep the valid one
-            if has_exc { Classification::EXC } else { Classification::INF }
+        // Multiple matches, multiple classes
+        if exc_count > 0 && inf_count > 0 {
+            // Both EXC and INF → NIPH
+            Classification::NIPH
+        } else if has_plot {
+            // Any class + PLOT3/PLOT5/LOTSC → NIPH
+            Classification::NIPH
+        } else if exc_count > 0 || inf_count > 0 {
+            // EXC or INF with ASM/ALM
+            let match_count = if exc_count > 0 { exc_count } else { inf_count };
+            if match_count == 1 {
+                // Single EXC/INF + ASM/ALM → keep the EXC/INF
+                if exc_count > 0 { Classification::EXC } else { Classification::INF }
+            } else {
+                Classification::NIPH
+            }
         } else {
+            // Multiple ASM/ALM → NIPH
             Classification::NIPH
         }
     }

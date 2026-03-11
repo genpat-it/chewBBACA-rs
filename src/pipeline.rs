@@ -45,6 +45,26 @@ pub fn run_allele_call(
 
     let mut schema = schema::load_schema(schema_dir, &loci_list, config.translation_table);
 
+    // Read schema config (chewBBACA .schema_config pickle)
+    // and apply schema-specific parameters (override CLI defaults)
+    let schema_config = schema::read_schema_config(schema_dir);
+    let mut effective_config = config.clone();
+    if let Some(bsr) = schema_config.bsr {
+        if (config.bsr_threshold - 0.6).abs() < 1e-9 {
+            // User didn't override BSR, use schema value
+            effective_config.bsr_threshold = bsr;
+            eprintln!("  Schema BSR threshold: {}", bsr);
+        }
+    }
+    if let Some(st) = schema_config.size_threshold {
+        if (config.size_threshold - 0.2).abs() < 1e-9 {
+            // User didn't override size_threshold, use schema value
+            effective_config.size_threshold = st;
+            eprintln!("  Schema size threshold: {}", st);
+        }
+    }
+    let config = &effective_config;
+
     // Find prodigal training file in schema directory
     let training_file = find_training_file(schema_dir);
     if let Some(ref trn) = training_file {
@@ -287,25 +307,19 @@ pub fn run_allele_call(
     eprintln!("  Protein exact matches: {}", prot_exact_count);
 
     // --- Phase 4: Clustering + alignment ---
-    let t4 = std::time::Instant::now(); eprintln!("  [TIMING] Phases 3a-c: {:.1}s", t4.duration_since(t3a).as_secs_f64()); eprintln!("[Phase 4] Clustering + SW alignment{}...", if config.use_gpu { " (GPU)" } else { "" });
+    let t4 = std::time::Instant::now(); eprintln!("  [TIMING] Phases 3a-c: {:.1}s", t4.duration_since(t3a).as_secs_f64());
+    let mode_label = if config.use_gpu { " (GPU)" } else { "" };
+    eprintln!("[Phase 4] Clustering + alignment{}...", mode_label);
     let k = 5;
     let w = 5;
     let min_shared = 1;
-
-    let index = cluster::build_minimizer_index(&schema.representatives, k, w);
 
     let cluster_input: Vec<(usize, Vec<u8>)> = unmatched_proteins
         .iter()
         .map(|(idx, protein, _)| (*idx, protein.clone()))
         .collect();
 
-    // Build alignment pairs on CPU (no GPU needed yet)
-    let (pair_protein_idx, pair_rep_idx) = cluster::build_alignment_pairs(
-        &cluster_input, &index, k, w, min_shared,
-    );
-    eprintln!("  {} alignment pairs from {} proteins", pair_protein_idx.len(), cluster_input.len());
-
-    // NOW wait for GPU init (started at top of function, overlaps with phases 0-3 + clustering)
+    // Wait for GPU init if applicable
     let gpu_aligner = if let Some(handle) = gpu_handle {
         match handle.join().expect("GPU init thread panicked") {
             Ok(a) => {
@@ -320,6 +334,12 @@ pub fn run_allele_call(
     } else {
         None
     };
+
+    let index = cluster::build_minimizer_index(&schema.representatives, k, w);
+    let (pair_protein_idx, pair_rep_idx) = cluster::build_alignment_pairs(
+        &cluster_input, &index, k, w, min_shared,
+    );
+    eprintln!("  {} alignment pairs from {} proteins", pair_protein_idx.len(), cluster_input.len());
 
     let cluster_results = if let Some(ref aligner) = gpu_aligner {
         cluster::align_pairs_gpu(

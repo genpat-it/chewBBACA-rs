@@ -1,4 +1,4 @@
-//! chewBBACA-rs: Rust reimplementation of chewBBACA AlleleCall.
+//! chewcall: Fast allele caller for cgMLST/wgMLST schemas.
 
 use std::path::PathBuf;
 use clap::Parser;
@@ -20,8 +20,8 @@ mod pipeline;
 use types::Config;
 
 #[derive(Parser, Debug)]
-#[command(name = "chewbbacca-rs")]
-#[command(about = "Fast allele calling for cgMLST/wgMLST (Rust reimplementation of chewBBACA)")]
+#[command(name = "chewcall")]
+#[command(about = "Fast allele calling for cgMLST/wgMLST, compatible with chewBBACA schemas")]
 #[command(version)]
 struct Cli {
     /// Input directory with genome FASTA files
@@ -72,6 +72,7 @@ struct Cli {
     /// Path to prodigal binary (default: "prodigal" in PATH)
     #[arg(long)]
     prodigal_path: Option<PathBuf>,
+
 }
 
 fn main() {

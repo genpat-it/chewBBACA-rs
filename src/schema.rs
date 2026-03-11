@@ -183,6 +183,88 @@ pub fn sha256(data: &[u8]) -> SeqHash {
     hash
 }
 
+/// Schema parameters from chewBBACA's .schema_config pickle file.
+#[derive(Debug, Default)]
+pub struct SchemaConfig {
+    pub bsr: Option<f64>,
+    pub size_threshold: Option<f64>,
+    pub translation_table: Option<u8>,
+    pub minimum_locus_length: Option<u32>,
+}
+
+/// Read chewBBACA schema config (.schema_config pickle file).
+/// Parses a minimal subset of Python pickle protocol 3 to extract numeric parameters.
+pub fn read_schema_config(schema_dir: &Path) -> SchemaConfig {
+    let config_path = schema_dir.join(".schema_config");
+    let mut config = SchemaConfig::default();
+
+    let data = match std::fs::read(&config_path) {
+        Ok(d) => d,
+        Err(_) => return config,
+    };
+
+    // Scan for key strings and extract following float/int values.
+    // Pickle3 format: X + 4-byte len + string for keys, G + 8-byte double for floats,
+    // K + 1-byte for small ints.
+    let keys = [
+        ("bsr", 0u8),
+        ("size_threshold", 0),
+        ("translation_table", 1),
+        ("minimum_locus_length", 1),
+    ];
+
+    for (key, _is_int) in &keys {
+        let key_bytes = key.as_bytes();
+        // Find key in pickle data
+        if let Some(pos) = data.windows(key_bytes.len())
+            .position(|w| w == key_bytes)
+        {
+            // Scan forward from after the key to find the value
+            let search_start = pos + key_bytes.len();
+            let search_end = (search_start + 50).min(data.len());
+            let window = &data[search_start..search_end];
+
+            // Look for G (float64) or K (uint8) or J (int32)
+            for i in 0..window.len() {
+                match window[i] {
+                    b'G' if i + 9 <= window.len() => {
+                        // IEEE 754 double, big-endian
+                        let bytes: [u8; 8] = window[i+1..i+9].try_into().unwrap();
+                        let val = f64::from_be_bytes(bytes);
+                        match *key {
+                            "bsr" => config.bsr = Some(val),
+                            "size_threshold" => config.size_threshold = Some(val),
+                            _ => {}
+                        }
+                        break;
+                    }
+                    b'K' if i + 2 <= window.len() => {
+                        let val = window[i+1] as u32;
+                        match *key {
+                            "translation_table" => config.translation_table = Some(val as u8),
+                            "minimum_locus_length" => config.minimum_locus_length = Some(val),
+                            _ => {}
+                        }
+                        break;
+                    }
+                    b'J' if i + 5 <= window.len() => {
+                        let bytes: [u8; 4] = window[i+1..i+5].try_into().unwrap();
+                        let val = i32::from_le_bytes(bytes) as u32;
+                        match *key {
+                            "minimum_locus_length" => config.minimum_locus_length = Some(val),
+                            _ => {}
+                        }
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    config
+}
+
 fn compute_mode(lengths: &[u32]) -> u32 {
     if lengths.is_empty() {
         return 0;

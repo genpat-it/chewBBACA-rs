@@ -1,187 +1,203 @@
-# chewBBACA-rs: Rust AlleleCall
+# chewcall: Design Document
 
-Reimplementazione in Rust del modulo AlleleCall di chewBBACA.
-Obiettivo: stessi risultati (matrice allelica identica), 10-20x più veloce.
+Fast allele caller for cgMLST/wgMLST schemas, inspired by the AlleleCall algorithm of [chewBBACA](https://github.com/B-UMMI/chewBBACA).
 
-## Pipeline (7 fasi)
+## Architecture
 
-### Fase 1: CDS Prediction
-- Input: FASTA assemblaggi genomici
-- Chiama `prodigal` come subprocess (o binding C via FFI)
-- Output: CDS predetti + coordinate (contig, start, stop, strand)
-- Crate: `std::process::Command` per subprocess
+chewcall is implemented in Rust for performance-critical paths, with Python (pyrodigal) for CDS prediction. Alignment is performed via [parasail](https://github.com/jeffdaily/parasail) (SIMD Smith-Waterman, BLOSUM62, gap_open=11, gap_extend=1), with optional CUDA GPU acceleration.
 
-### Fase 2: Deduplicazione CDS
-- SHA256 hash di ogni sequenza DNA
-- HashMap<Hash, Vec<GenomeId>> per raggruppare duplicati
-- Tiene solo il "rappresentativo" (primo visto)
-- Output: FASTA con CDS distinti
-
-### Fase 3a: Exact Matching DNA
-- Carica hash table pre-computate dallo schema (pickle → bisogna convertire o rigenerare)
-- Intersezione hash input ∩ hash schema
-- Match → classificazione **EXC** (BSR = 1.0)
-
-### Fase 3b: Traduzione
-- Traduce CDS non classificati → proteine
-- Tavola codoni standard (genetic code 11 default)
-- Filtra: lunghezza minima, codoni ambigui, stop prematuri
-- Crate: implementazione custom (triviale, ~50 righe)
-
-### Fase 3c: Exact Matching Proteine
-- Come 3a ma su hash proteici
-- Match → classificazione **INF** (primo match) o **EXC** (già visto)
-
-### Fase 4: Clustering + Allineamento
-- Minimizer index (k=5, w=5) sui rappresentativi dello schema
-- Clustering proteine non classificate (threshold similarità 0.2)
-- Smith-Waterman BLOSUM62 (gap_open=11, gap_extend=1) su ogni cluster
-- BSR = raw_score / self_score
-- BSR >= 0.6 → classificazione (vedi sotto)
-- BSR in [0.6, 0.7) → candidati rappresentativi per fase 5
-
-### Fase 5: Representative Determination (iterativo)
-- BLAST/SW rappresentativi vs proteine non classificate
-- Classifica match con BSR >= 0.6
-- Seleziona nuovi rappresentativi da candidati BSR [0.6, 0.7)
-- Ripete finché non trova nuovi rappresentativi
-
-### Fase 6: Classificazione
-Per ogni match inesatto (BSR >= threshold):
+### Source layout
 
 ```
-1. Posizione sul contig (solo se input = assemblaggio):
-   - contig_length < rep_length → LOTSC
-   - allineamento esce dal 5' → PLOT5
-   - allineamento esce dal 3' → PLOT3
-
-2. Dimensione CDS:
-   - length < mode × 0.8 → ASM
-   - length > mode × 1.2 → ALM
-
-3. Match multipli stesso locus:
-   - tutti EXC → NIPHEM
-   - altrimenti → NIPH
-
-4. Match multipli loci diversi → PAMA
-
-5. Nessun match → LNF
-
-6. Default → INF (nuovo allele inferito)
-```
-
-### Fase 7: Output
-- `results_alleles.tsv` — matrice allelica (genoma × locus)
-- `results_statistics.tsv` — conteggi per classe per genoma
-- `results_contigsInfo.tsv` — coordinate CDS per EXC/INF
-- `loci_summary_stats.tsv` — conteggi per classe per locus
-- `novel_alleles.fasta` — nuovi alleli inferiti
-
-## Struttura Rust
-
-```
-chewbbacca-rs/
+chewcall/
 ├── Cargo.toml
+├── predict_cds.py        # CDS prediction via pyrodigal
 ├── src/
-│   ├── main.rs          # CLI (clap)
-│   ├── cds.rs           # Fase 1: CDS prediction (subprocess prodigal)
-│   ├── dedup.rs         # Fase 2: deduplicazione SHA256
-│   ├── exact_match.rs   # Fase 3: exact matching DNA + proteine
-│   ├── translate.rs     # Fase 3b: traduzione codoni
-│   ├── cluster.rs       # Fase 4: minimizer clustering
-│   ├── sw.rs            # Smith-Waterman BLOSUM62 con SIMD
-│   ├── bsr.rs           # BSR computation + thresholds
-│   ├── classify.rs      # Fase 6: logica classificazione
-│   ├── repdet.rs        # Fase 5: representative determination
-│   ├── schema.rs        # Lettura/scrittura schema (FASTA + hash tables)
-│   ├── output.rs        # Fase 7: output TSV/FASTA
-│   └── types.rs         # Tipi condivisi
+│   ├── main.rs           # CLI (clap) + genome discovery
+│   ├── pipeline.rs       # Pipeline orchestration (7 phases)
+│   ├── types.rs          # Shared types (Config, Cds, Classification, etc.)
+│   ├── schema.rs         # Schema loading (FASTA parsing, hashing, config)
+│   ├── cds.rs            # CDS prediction (prodigal subprocess) + loading
+│   ├── translate.rs      # Codon translation (genetic code tables)
+│   ├── dedup.rs          # SHA-256 deduplication across genomes
+│   ├── cluster.rs        # Minimizer-based clustering + SW alignment
+│   ├── classify.rs       # Classification logic (all 11 classes)
+│   ├── repdet.rs         # Representative determination (iterative)
+│   ├── sw.rs             # Pure-Rust Smith-Waterman (BLOSUM62)
+│   ├── parasail_ffi.rs   # FFI bindings to parasail C library
+│   ├── gpu_sw.rs         # CUDA GPU Smith-Waterman (via cudarc)
+│   └── output.rs         # TSV/FASTA output writers
 ```
 
-## Dipendenze Rust
+### Dependencies
 
-```toml
-[dependencies]
-clap = { version = "4", features = ["derive"] }    # CLI
-rayon = "1.10"                                       # parallelismo
-needletail = "0.5"                                   # parsing FASTA (velocissimo)
-sha2 = "0.10"                                        # SHA256 hashing
-rustc-hash = "2"                                     # FxHashMap (veloce)
-memchr = "2"                                         # ricerca byte veloce
-csv = "1.3"                                          # output TSV
+| Crate | Purpose |
+|-------|---------|
+| `clap` | CLI argument parsing |
+| `rayon` | Data parallelism (all pipeline phases) |
+| `needletail` | Fast FASTA parsing |
+| `sha2` | SHA-256 hashing for deduplication |
+| `rustc-hash` | FxHashMap (fast hash map) |
+| `crc32fast` | CRC32 hashing for allele profiles |
+| `csv` | TSV output |
+| `cudarc` | CUDA runtime bindings (optional GPU) |
 
-# Per SW SIMD:
-# Implementazione custom con std::arch (AVX2/SSE4.1)
-# Oppure parasail-rs (binding a parasail C library)
+### External dependencies
+
+| Library | Purpose |
+|---------|---------|
+| [parasail](https://github.com/jeffdaily/parasail) | SIMD Smith-Waterman (AVX2/SSE4.1) |
+| [pyrodigal](https://github.com/althonos/pyrodigal) | CDS prediction (Python) |
+
+## Pipeline (7 phases)
+
+### Phase 0: Schema loading
+- Discovers loci from `short/` directory (representative alleles)
+- Parses all FASTA files in parallel (rayon)
+- Builds SHA-256 hash tables for DNA and protein sequences
+- Computes CRC32 hashes for allele profile output
+- Reads `.schema_config` pickle for BSR/size thresholds
+- Computes or loads cached self-scores for representatives (parasail self-alignment)
+
+### Phase 1: CDS prediction
+- Runs prodigal as subprocess for each genome (parallel via rayon)
+- Or loads pre-computed CDS from `--cds-input` directory (recommended)
+- Pre-computation via `predict_cds.py` uses pyrodigal with `closed=True, mask=True` to match chewBBACA parameters
+- Collects contig lengths for PLOT3/PLOT5 classification
+
+### Phase 2: Deduplication
+- SHA-256 hash of each CDS DNA sequence (uppercased)
+- Groups identical CDS across all genomes
+- Processes only distinct sequences in subsequent phases
+- Maintains `hash → [(genome_idx, cds_idx)]` mapping for result propagation
+
+### Phase 3a: Exact DNA matching
+- Hash lookup: CDS DNA hash against schema allele hashes
+- Match → **EXC** classification
+- Multiple EXC matches for same genome+locus → **NIPHEM**
+
+### Phase 3b: Translation
+- Translates unmatched CDS to protein (genetic code 11 default)
+- Filters by minimum length
+
+### Phase 3c: Exact protein matching
+- Hash lookup: protein hash against schema protein hashes
+- Match → **INF** (first genome to see this allele) or **EXC** (subsequent genomes)
+- Novel alleles: assigns next allele ID, writes to `novel_alleles.fasta`
+- CRC32 hash computed for hashed output
+
+### Phase 4: Clustering + alignment
+- **Minimizer index**: builds minimizer (k=5, w=5) index over all representative proteins
+- **Clustering**: for each unmatched protein, finds top-5 representatives by shared minimizer count (min_shared=1)
+- **Alignment**: Smith-Waterman (BLOSUM62, gap_open=11, gap_extend=1) via parasail SIMD or CUDA GPU
+- **BSR**: `score / representative_self_score` (target self-score)
+- BSR >= threshold → classify based on alignment positions and sequence lengths
+- Builds all alignment pairs first, then batches to GPU or CPU
+
+### Phase 5: Representative determination (iterative)
+- Processes Phase 4 results: BSR in [threshold, threshold+0.1) → candidate new representatives
+- Adds candidates to representative set
+- Rebuilds minimizer index and re-aligns remaining unmatched proteins
+- Repeats until no new representatives found (max 10 iterations)
+- Uses GPU if available, falls back to CPU
+
+### Phase 6: Classification
+For each inexact match (BSR >= threshold):
+
+```
+1. Target alignment coverage:
+   - target coverage < 100% AND contig too short → LOTSC
+   - alignment doesn't reach target 5' end → PLOT5
+   - alignment doesn't reach target 3' end → PLOT3
+
+2. Size comparison vs mode allele length:
+   - CDS length < mode × (1 - size_threshold) → ASM
+   - CDS length > mode × (1 + size_threshold) → ALM
+
+3. Multiple matches same locus:
+   - Single EXC/INF + ASM/ALM → keeps EXC/INF
+   - All EXC → NIPHEM
+   - Otherwise → NIPH
+
+4. Multiple matches different loci → PAMA
+
+5. No match → LNF
+
+6. Default → INF (novel inferred allele)
 ```
 
-## Smith-Waterman SIMD
+### Phase 7: Output
+- `results_alleles.tsv` — allelic profile matrix (genome × locus)
+- `results_alleles_hashed.tsv` — CRC32-hashed allelic profiles
+- `results_statistics.tsv` — per-genome classification counts
+- `loci_summary_stats.tsv` — per-locus classification counts
+- `results_contigsInfo.tsv` — CDS coordinates for classified loci
+- `novel_alleles.fasta` — novel allele sequences (INF)
 
-L'allineamento SW è il cuore computazionale. Due opzioni:
+## Key design decisions
 
-### Opzione A: parasail-rs (binding C)
-- parasail già installato in ~/parasail/
-- Supporta AVX2, SSE4.1, NEON
-- 50-100 GCUPS su CPU moderna
-- Zero sforzo implementativo
+### parasail instead of BLAST
+BLAST is replaced by parasail SIMD Smith-Waterman with the same scoring parameters (BLOSUM62, gap_open=11, gap_extend=1). This eliminates the BLAST dependency and enables direct library-level alignment calls without subprocess overhead. Statistical validation shows Cohen's Kappa = 0.9993 and 99.97% CRC32 hash agreement vs chewBBACA with BLAST.
 
-### Opzione B: Implementazione custom
-- Striped SW come in geo_aligner
-- BLOSUM62 hardcoded, gap_open=11, gap_extend=1
-- AVX2: 32 celle per istruzione (int8) o 8 celle (int32)
-- Più controllo, meno dipendenze
+### Target self-score BSR
+chewcall uses `BSR = alignment_score / representative_self_score` (target self-score), while chewBBACA uses `score / query_self_score`. With parasail SIMD alignment, target self-score produces better concordance with chewBBACA results than query self-score (validated empirically).
 
-**Raccomandazione**: inizia con parasail-rs, poi reimplementa se serve.
+### Minimizer pre-filter
+Instead of BLAST's internal word seeding, chewcall uses a minimizer index (k=5, w=5) to select the top-5 candidate representatives per query protein. This reduces alignment pairs by ~8x without affecting classification results. FNV-1a hash is used for k-mer hashing.
 
-## Performance attesa
+### Read-only schema
+Unlike chewBBACA (mode 4), chewcall does not modify schema files. Novel alleles are tracked in memory during the run (for deduplication across genomes) and written to `novel_alleles.fasta`, but never appended to schema FASTA files. This avoids schema contamination and makes runs reproducible.
 
-| Fase | Python | Rust (stima) | Speedup |
-|------|--------|-------------|---------|
-| CDS prediction | 60s | 55s (prodigal subprocess, stesso) | 1.1x |
-| Dedup + hash | 27s | 2-3s (rayon + SHA256-ni) | 10x |
-| Clustering | 7s | 0.5s | 14x |
-| SW alignment | 17s (GPU 4 GCUPS) | 2-3s (CPU 50 GCUPS parasail) | 6x |
-| Wrapping up | 30s | 3-5s | 8x |
-| **Totale** | **~140s** | **~65s** | **~2x** |
+### GPU acceleration (optional)
+CUDA GPU support via `cudarc` for batched Smith-Waterman alignment. The GPU kernel processes all alignment pairs in a single batch. GPU is used only for Phase 4 and Phase 5 alignment; all other phases run on CPU. Falls back to CPU parasail if GPU initialization fails.
 
-Nota: CDS prediction domina. Se si usa pyrodigal multi-thread
-o una reimplementazione, si può scendere a ~30s totali.
+## Schema compatibility
 
-## Schema Compatibility
+chewcall reads schemas in the standard chewBBACA format:
 
-Lo schema chewBBACA usa:
-- File FASTA per locus (alleli)
-- Pickle per hash tables pre-computate
-- Pickle per loci_modes
-
-Per compatibilità:
-1. **Leggere pickle**: usare `serde` + formato custom, oppure
-   script Python di conversione pickle → JSON/bincode
-2. **Rigenerare hash tables**: più semplice, calcola SHA256 da FASTA
-3. **loci_modes**: calcola al volo dalla distribuzione alleli
-
-**Approccio consigliato**: ignora pickle, rigenera tutto da FASTA.
-Lo schema è definito dai file FASTA, il resto è cache.
-
-## Validazione
-
-Per verificare identità risultati:
-```bash
-# Run Python chewBBACA
-chewBBACA.py AlleleCall -i genomes/ -g schema/ -o output_py/
-
-# Run Rust chewBBACA
-chewbbacca-rs allele-call -i genomes/ -g schema/ -o output_rs/
-
-# Compare CRC32 hashed profiles
-diff output_py/results_alleles.tsv output_rs/results_alleles.tsv
+```
+schema/
+├── locus1.fasta            # Full allele sequences per locus
+├── locus2.fasta
+├── short/
+│   ├── locus1_short.fasta  # Representative allele(s) per locus
+│   └── locus2_short.fasta
+├── *.trn                   # Prodigal training file
+└── .schema_config          # (optional) pickle with BSR/size thresholds
 ```
 
-## Step-by-step di implementazione
+- Locus list is derived from `short/*_short.fasta` filenames
+- Allele IDs are parsed from FASTA headers (e.g., `>locus_1_1`, `>locus_1_2`)
+- Mode length (most frequent allele length) is computed from full FASTA files
+- `.schema_config` pickle is read for BSR and size_threshold values (overrides CLI defaults)
+- Self-scores are cached in `short/self_scores_rs.tsv` for fast re-runs
 
-1. **Settimana 1**: CLI + schema reader + traduzione + dedup + exact matching
-   - Obiettivo: produrre EXC/INF da exact matching
-2. **Settimana 2**: SW alignment (parasail) + BSR + clustering + classificazione
-   - Obiettivo: pipeline completo con tutte le classi
-3. **Settimana 3**: RepDet iterativo + output files + validazione vs Python
-   - Obiettivo: matrice identica a chewBBACA Python
+Compatible with schemas from:
+- [Chewie-NS](https://chewbbaca.online/) (`DownloadSchema`)
+- `chewBBACA.py PrepExternalSchema`
+- `chewBBACA.py CreateSchema`
+
+## Validation
+
+Validated against chewBBACA v3.3.10 on BeONE datasets (Salmonella enterica, 100 genomes, 8558 wgMLST loci):
+
+| Metric | Value |
+|--------|-------|
+| Cohen's Kappa | 0.9993 |
+| Pearson correlation (CRC32) | r = 0.99996 |
+| CRC32 matrix match | 99.97% (855,522 / 855,800) |
+| Per-genome Hamming distance | mean 2.78 / 8558 loci |
+| TOST equivalence test | p < 0.001 |
+
+The 278 discordant cells (0.03%) are due to alignment boundary effects between parasail and BLASTp, not systematic errors.
+
+## Performance
+
+Benchmarked on BeONE datasets (100 genomes, 8 CPU threads):
+
+| Organism | Loci | chewBBACA | chewcall | Speedup |
+|----------|------|-----------|----------|---------|
+| *L. monocytogenes* | 1748 | 57.6s | 4.6s | **12.5x** |
+| *S. enterica* | 8558 | 226.7s | 12.9s | **17.6x** |
+| *E. coli* | 7601 | 390.2s | 29.9s | **13.0x** |
+| *C. jejuni* | 2794 | 101.4s | 7.9s | **12.9x** |
