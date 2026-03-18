@@ -71,7 +71,9 @@ All wgMLST differences are confined to accessory loci and do not affect cgMLST-b
 
 ## Performance
 
-Benchmarked on [BeONE](https://onehealthejp.eu/projects/foodborne-zoonoses/jrp-beone) datasets (100 genomes each, 8 CPU threads). Schemas from [Chewie-NS](https://chewbbaca.online/). Both tools use the same pre-computed CDS from pyrodigal to ensure identical gene predictions.
+Benchmarked on [BeONE](https://onehealthejp.eu/projects/foodborne-zoonoses/jrp-beone) datasets (100 genomes each, 8 CPU threads). Schemas from [Chewie-NS](https://chewbbaca.online/). Both tools use the same pre-computed CDS ([pyrodigal](https://github.com/althonos/pyrodigal)) to ensure identical gene predictions.
+
+#### Allele calling time (excluding CDS prediction)
 
 | Organism | Loci | Schema | chewBBACA | chewcall | Speedup | CRC32 match (wgMLST) | CRC32 match (core) |
 |----------|------|--------|-----------|----------|---------|----------------------|---------------------|
@@ -81,6 +83,19 @@ Benchmarked on [BeONE](https://onehealthejp.eu/projects/foodborne-zoonoses/jrp-b
 | *C. jejuni* | 2794 | wgMLST | 99s | 10.6s | **9.3x** | 99.996% | **IDENTICAL** (994 core loci) |
 
 Core loci are defined as those present in >=95% of genomes in each dataset, corresponding to the loci used in cgMLST-based epidemiological surveillance.
+
+#### End-to-end time (including CDS prediction)
+
+CDS prediction via [pyrodigal](https://github.com/althonos/pyrodigal) is a shared cost for both tools. When included, the total wall-clock time is:
+
+| Organism | CDS prediction | chewBBACA (total) | chewcall (total) | Speedup |
+|----------|----------------|-------------------|------------------|---------|
+| *L. monocytogenes* | 34s | 85s | 38s | **2.2x** |
+| *S. enterica* | 69s | 200s | 92s | **2.2x** |
+| *E. coli* | 76s | 462s | 132s | **3.5x** |
+| *C. jejuni* | 14s | 113s | 25s | **4.5x** |
+
+The CDS prediction step is currently sequential; parallelizing it would further improve end-to-end times.
 
 ## Installation
 
