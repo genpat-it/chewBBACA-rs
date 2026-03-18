@@ -86,16 +86,14 @@ Core loci are defined as those present in >=95% of genomes in each dataset, corr
 
 #### End-to-end time (including CDS prediction)
 
-CDS prediction via [pyrodigal](https://github.com/althonos/pyrodigal) is a shared cost for both tools. When included, the total wall-clock time is:
+CDS prediction via [pyrodigal](https://github.com/althonos/pyrodigal) is a shared cost for both tools. `predict_cds.py` parallelizes across all available CPU cores. When included, the total wall-clock time is:
 
 | Organism | CDS prediction | chewBBACA (total) | chewcall (total) | Speedup |
 |----------|----------------|-------------------|------------------|---------|
-| *L. monocytogenes* | 34s | 85s | 38s | **2.2x** |
-| *S. enterica* | 69s | 200s | 92s | **2.2x** |
-| *E. coli* | 76s | 462s | 132s | **3.5x** |
-| *C. jejuni* | 14s | 113s | 25s | **4.5x** |
-
-The CDS prediction step is currently sequential; parallelizing it would further improve end-to-end times.
+| *L. monocytogenes* | 1.6s | 53s | 5.8s | **9.1x** |
+| *S. enterica* | 2.7s | 134s | 25s | **5.4x** |
+| *E. coli* | 2.9s | 389s | 59s | **6.6x** |
+| *C. jejuni* | 0.9s | 100s | 12s | **8.3x** |
 
 ## Installation
 

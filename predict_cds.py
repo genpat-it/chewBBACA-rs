@@ -71,9 +71,23 @@ def main():
         if f.suffix.lower() in extensions
     )
 
-    for gf in genome_files:
-        out = predict_genome(str(gf), training_info, args.translation_table, args.output)
-        print(f"  {gf.name} -> {Path(out).name}", file=sys.stderr)
+    n_workers = min(os.cpu_count() or 1, len(genome_files))
+    if n_workers > 1:
+        from concurrent.futures import ProcessPoolExecutor, as_completed
+        with ProcessPoolExecutor(max_workers=n_workers) as executor:
+            futures = {
+                executor.submit(predict_genome, str(gf), training_info,
+                                args.translation_table, args.output): gf
+                for gf in genome_files
+            }
+            for future in as_completed(futures):
+                gf = futures[future]
+                out = future.result()
+                print(f"  {gf.name} -> {Path(out).name}", file=sys.stderr)
+    else:
+        for gf in genome_files:
+            out = predict_genome(str(gf), training_info, args.translation_table, args.output)
+            print(f"  {gf.name} -> {Path(out).name}", file=sys.stderr)
 
     print(f"Done. {len(genome_files)} genomes processed.", file=sys.stderr)
 
