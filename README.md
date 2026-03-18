@@ -9,89 +9,17 @@
 
 A high-performance allele caller for cgMLST/wgMLST schemas, inspired by and compatible with [chewBBACA](https://github.com/B-UMMI/chewBBACA).
 
-**chewcall** reimplements the AlleleCall algorithm from chewBBACA in Rust, replacing BLASTp with SIMD-accelerated Smith-Waterman alignment via [parasail](https://github.com/jeffdaily/parasail), achieving **4-6x faster** allele calling with **identical or near-identical** results on full BeONE datasets (up to 1540 genomes). Core genome profiles are **100% identical** for 2 out of 4 tested organisms, with only 1 diff for a third.
-
-## Overview
-
-[chewBBACA](https://chewbbaca.readthedocs.io/) (BSR-Based Allele Calling Algorithm) is the reference tool for bacterial whole-genome and core-genome MLST analysis, widely used in foodborne pathogen surveillance and outbreak investigation.
-
-**chewcall** reimplements the AlleleCall module in Rust, replacing BLASTp with a native Smith-Waterman aligner (BLOSUM62, gap_open=11, gap_extend=1) and adding a minimizer-based clustering pre-filter to drastically reduce the number of alignment pairs.
+**chewcall** reimplements the AlleleCall algorithm from chewBBACA in Rust, replacing BLASTp with SIMD-accelerated Smith-Waterman alignment via [parasail](https://github.com/jeffdaily/parasail), achieving **3.6-5.9x faster** allele calling with **identical or near-identical** results on 8 BeONE datasets (up to 3,076 genomes, 8,558 loci). Core genome profiles (>=99% presence) differ by at most 6-30 cells across millions of comparisons.
 
 ### Key features
 
 - **Compatible** with chewBBACA schemas (Chewie-NS, PrepExternalSchema, CreateSchema)
-- **Identical results** on core genome loci for 3/4 tested organisms (see [Validation](#validation))
-- **6-12x faster** than chewBBACA on multi-core systems
+- **4-6x faster** than chewBBACA on multi-core systems
+- **Identical core genome results** for most organisms (see [Validation](#validation))
 - **Parallel everything**: schema loading, CDS deduplication, clustering, and SW alignment via [rayon](https://github.com/rayon-rs/rayon)
 - **Optional GPU acceleration** via CUDA for large-scale datasets
 - **Minimizer-based pre-filtering**: top-K cluster selection reduces alignment pairs by ~8x without affecting results
 - All 11 chewBBACA classification classes: EXC, INF, PLOT3, PLOT5, LOTSC, NIPH, NIPHEM, ALM, ASM, PAMA, LNF
-
-## Validation
-
-Validated on the full [BeONE](https://onehealthejp.eu/projects/foodborne-zoonoses/jrp-beone) datasets (up to 1540 genomes per organism), comparing chewcall vs chewBBACA v3.3.10 AlleleCall (mode 4). Schemas from [Chewie-NS](https://chewbbaca.online/). Both tools use the same pre-computed CDS (pyrodigal) to ensure identical gene predictions.
-
-CRC32-hashed allelic profiles are compared cell-by-cell. CRC32 hashing maps each allele to the hash of its DNA sequence, making the comparison independent of allele ID numbering.
-
-#### Full wgMLST comparison
-
-| Organism | Genomes | Loci | Cells | CRC32 match |
-|----------|---------|------|-------|-------------|
-| *L. monocytogenes* | 1,426 | 1,748 (cgMLST) | 2,492,648 | **100.0000%** (1 diff) |
-| *S. enterica* | 1,540 | 8,558 (wgMLST) | 13,179,320 | 99.9985% (204 diffs) |
-| *E. coli* | 308 | 7,601 (wgMLST) | 2,341,108 | 99.9935% (152 diffs) |
-| *C. jejuni* | 610 | 2,794 (wgMLST) | 1,704,340 | 99.9765% (401 diffs) |
-
-#### Core genome (cgMLST) comparison
-
-To assess accuracy on the loci that matter most for epidemiological surveillance, we restrict the comparison to **core loci** — those present in a given percentage of genomes. These correspond to the loci typically included in cgMLST schemas:
-
-| Organism | Core >=95% (loci) | CRC32 match | Core >=98% (loci) | CRC32 match | Core >=99% (loci) | CRC32 match |
-|----------|-------------------|-------------|-------------------|-------------|-------------------|-------------|
-| *L. monocytogenes* | 1,731 | 1 diff | 1,721 | 1 diff | 1,716 | 1 diff |
-| *S. enterica* | 3,259 | 77 diffs | 3,027 | 37 diffs | 2,765 | 16 diffs |
-| *E. coli* | 2,809 | **IDENTICAL** | 2,592 | **IDENTICAL** | 2,470 | **IDENTICAL** |
-| *C. jejuni* | 991 | **IDENTICAL** | 900 | **IDENTICAL** | 706 | **IDENTICAL** |
-
-*E. coli* and *C. jejuni* produce **100% identical** core genome profiles at any threshold. *L. monocytogenes* has a single diff across 2.5M cells. *S. enterica* differences are concentrated on borderline accessory loci and decrease steadily with stricter presence thresholds (77 → 37 → 16 diffs).
-
-### Why are there remaining wgMLST differences?
-
-chewBBACA uses **BLASTp** for protein alignment, while chewcall uses **parasail Smith-Waterman** (BLOSUM62, gap_open=11, gap_extend=1). Both use the same scoring matrix and gap penalties, but BLAST employs **database-size-dependent heuristics** (E-value thresholds, word seeding) that parasail's exact Smith-Waterman does not.
-
-The remaining differences across wgMLST schemas arise from:
-
-1. **Borderline hit discovery** — BLAST's word-seeding heuristics may find or miss alignments near the BSR threshold (0.6) that exact Smith-Waterman handles differently. Neither tool is "wrong" — these are genuinely borderline cases where the alignment score is close to the classification threshold.
-
-2. **Cascading novel allele effects** — When one tool discovers a novel allele (INF) that the other misses, subsequent genomes can match that novel allele. A single borderline difference in one genome can cascade into multiple discordant cells across other genomes for the same locus.
-
-3. **Accessory loci are noisier** — Accessory loci (present in <95% of genomes) are inherently more variable and have weaker matches to schema representatives. Small scoring differences between BLAST and parasail are more likely to flip a classification near the threshold. Core loci, being well-conserved, produce robust matches that are insensitive to the alignment engine used.
-
-All wgMLST differences are confined to accessory loci and do not affect cgMLST-based epidemiological analysis (minimum spanning trees, cluster detection, outbreak investigation).
-
-## Performance
-
-Benchmarked on the full [BeONE](https://onehealthejp.eu/projects/foodborne-zoonoses/jrp-beone) datasets (8 CPU threads). Schemas from [Chewie-NS](https://chewbbaca.online/). Both tools use the same pre-computed CDS ([pyrodigal](https://github.com/althonos/pyrodigal)) to ensure identical gene predictions.
-
-#### Allele calling time
-
-| Organism | Genomes | Loci | chewBBACA | chewcall | Speedup |
-|----------|---------|------|-----------|----------|---------|
-| *L. monocytogenes* | 1,426 | 1,748 | 156s | 38.5s | **4.1x** |
-| *S. enterica* | 1,540 | 8,558 | 586s | 147s | **4.0x** |
-| *E. coli* | 308 | 7,601 | 570s | 97s | **5.9x** |
-| *C. jejuni* | 610 | 2,794 | 215s | 49.5s | **4.3x** |
-
-#### End-to-end time (including CDS prediction)
-
-CDS prediction via [pyrodigal](https://github.com/althonos/pyrodigal) is a shared cost for both tools. `predict_cds.py` parallelizes across all available CPU cores.
-
-| Organism | CDS prediction | chewBBACA (total) | chewcall (total) | Speedup |
-|----------|----------------|-------------------|------------------|---------|
-| *L. monocytogenes* | 13.6s | 170s | 52s | **3.3x** |
-| *S. enterica* | 28.8s | 614s | 176s | **3.5x** |
-| *E. coli* | 6.9s | 577s | 104s | **5.5x** |
-| *C. jejuni* | 3.0s | 218s | 53s | **4.1x** |
 
 ## Installation
 
@@ -99,7 +27,7 @@ CDS prediction via [pyrodigal](https://github.com/althonos/pyrodigal) is a share
 
 - Rust 1.75+ (install via [rustup](https://rustup.rs/))
 - [parasail](https://github.com/jeffdaily/parasail) (SIMD-accelerated Smith-Waterman library)
-- Python 3.9+ with [pyrodigal](https://github.com/althonos/pyrodigal) (for CDS prediction)
+- Python 3.9+ with [pyrodigal](https://github.com/althonos/pyrodigal) and [biopython](https://biopython.org/) (for CDS prediction, see `requirements.txt`)
 - Optional: CUDA 12+ and NVIDIA GPU (for `--gpu` mode)
 
 ### Build
@@ -154,7 +82,10 @@ Options:
   -o, --output <OUTPUT>         Output directory
       --cpu <CPU>               Number of CPU threads [default: 1]
       --cds-input <CDS_INPUT>   Pre-computed CDS directory (skip prodigal)
+      --mode <MODE>             Alignment mode: "fast" (parasail) or "compatible" (BLAST) [default: fast]
+      --blastp-path <PATH>      Path to blastp binary (required for --mode compatible)
       --gpu                     Use GPU (CUDA) for Smith-Waterman alignment
+      --update-schema           Append novel alleles (INF) to schema FASTA files in place
       --bsr <BSR>               BLAST Score Ratio threshold [default: 0.6]
       --size-threshold <SIZE>   Size threshold for ASM/ALM [default: 0.2]
       --min-length <MIN>        Minimum sequence length [default: 0]
@@ -193,6 +124,82 @@ chewBBACA.py DownloadSchema -sp <species_id> -sc <schema_id> -o schema_dir
 | `results_contigsInfo.tsv` | CDS coordinates on contigs |
 | `novel_alleles.fasta` | Novel allele sequences (INF) |
 
+## Validation
+
+Validated on 8 [BeONE](https://onehealthejp.eu/projects/foodborne-zoonoses/jrp-beone) datasets (4 consortium + 4 public), comparing chewcall (fast mode, parasail) vs chewBBACA v3.5.3. Both tools use the same pre-computed CDS (pyrodigal) to ensure identical gene predictions. CRC32-hashed allelic profiles are compared cell-by-cell; CRC32 hashing maps each allele to the hash of its DNA sequence, making the comparison independent of allele ID numbering.
+
+#### wgMLST (all loci)
+
+| Dataset | Organism | Genomes | Loci | Cells | Diffs | CRC32 match |
+|---------|----------|---------|------|-------|-------|-------------|
+| Consortium | *L. monocytogenes* | 1,426 | 1,748 (cgMLST) | 2,492,648 | 1 | **100.0000%** |
+| Consortium | *S. enterica* | 1,540 | 8,558 (wgMLST) | 13,179,320 | 204 | 99.9985% |
+| Consortium | *E. coli* | 308 | 7,601 (wgMLST) | 2,341,108 | 152 | 99.9935% |
+| Consortium | *C. jejuni* | 610 | 2,794 (wgMLST) | 1,704,340 | 401 | 99.9765% |
+| Public | *L. monocytogenes* | 1,874 | 1,748 (cgMLST) | 3,275,752 | 1 | **100.0000%** |
+| Public | *S. enterica* | 1,434 | 8,558 (wgMLST) | 12,272,172 | 1,682 | 99.9863% |
+| Public | *E. coli* | 1,999 | 7,601 (wgMLST) | 15,194,399 | 1,633 | 99.9893% |
+| Public | *C. jejuni* | 3,076 | 2,794 (wgMLST) | 8,594,344 | 1,803 | 99.9790% |
+
+#### Core genome comparison
+
+Core loci are those present in a given percentage of genomes, corresponding to the loci typically used in cgMLST-based epidemiological surveillance:
+
+| Dataset | Organism | Core >=95% | Diffs | Core >=98% | Diffs | Core >=99% | Diffs |
+|---------|----------|------------|-------|------------|-------|------------|-------|
+| Consortium | *L. monocytogenes* | 1,731 | 1 | 1,721 | 1 | 1,716 | 1 |
+| Consortium | *S. enterica* | 3,259 | 77 | 3,027 | 37 | 2,765 | 16 |
+| Consortium | *E. coli* | 2,809 | **0** | 2,592 | **0** | 2,470 | **0** |
+| Consortium | *C. jejuni* | 991 | **0** | 900 | **0** | 706 | **0** |
+| Public | *L. monocytogenes* | 1,730 | 1 | 1,717 | 1 | 1,691 | 1 |
+| Public | *S. enterica* | 3,045 | 1,438 | 2,905 | 1,437 | 2,752 | 30 |
+| Public | *E. coli* | 2,797 | 6 | 2,629 | 6 | 2,412 | 6 |
+| Public | *C. jejuni* | 1,006 | 6 | 983 | 6 | 927 | 6 |
+
+Consortium datasets show near-perfect agreement: *E. coli* and *C. jejuni* produce **100% identical** core genome profiles at any threshold, while *L. monocytogenes* has a single diff across 2.5M cells. Public datasets (larger, up to 3,076 genomes) confirm this trend: core 99% differences are at most 30 cells for *S. enterica* wgMLST and 6 cells for *E. coli* and *C. jejuni*.
+
+### Why are there remaining wgMLST differences?
+
+chewBBACA uses **BLASTp** for protein alignment, while chewcall uses **parasail Smith-Waterman** (BLOSUM62, gap_open=11, gap_extend=1). Both use the same scoring matrix and gap penalties, but BLAST employs **database-size-dependent heuristics** (E-value thresholds, word seeding) that parasail's exact Smith-Waterman does not.
+
+The remaining differences arise from:
+
+1. **Borderline hit discovery** — BLAST's word-seeding heuristics may find or miss alignments near the BSR threshold (0.6) that exact Smith-Waterman handles differently. Neither tool is "wrong" — these are genuinely borderline cases where the alignment score is close to the classification threshold.
+
+2. **Cascading novel allele effects** — When one tool discovers a novel allele (INF) that the other misses, subsequent genomes can match that novel allele. A single borderline difference in one genome can cascade into multiple discordant cells across other genomes for the same locus.
+
+3. **Accessory loci are noisier** — Accessory loci (present in <95% of genomes) are inherently more variable and have weaker matches to schema representatives. Small scoring differences between BLAST and parasail are more likely to flip a classification near the threshold. Core loci, being well-conserved, produce robust matches that are insensitive to the alignment engine used.
+
+All wgMLST differences are confined to accessory loci and do not affect cgMLST-based epidemiological analysis (minimum spanning trees, cluster detection, outbreak investigation).
+
+## Performance
+
+Benchmarked on 8 [BeONE](https://onehealthejp.eu/projects/foodborne-zoonoses/jrp-beone) datasets (8 CPU threads). Both tools use the same pre-computed CDS ([pyrodigal](https://github.com/althonos/pyrodigal)).
+
+#### Benchmark environment
+
+| Component | Specification |
+|-----------|---------------|
+| CPU | 2x Intel Xeon Gold 6542Y (80 cores total) |
+| RAM | 504 GB DDR5 |
+| GPU | NVIDIA L4 (24 GB VRAM) |
+| OS | AlmaLinux 10.1, kernel 6.12 |
+| Rust | 1.85 (cargo build --release, target-cpu=native) |
+| chewBBACA | v3.5.3 (Python 3.11, BLAST+ 2.16) |
+
+#### Allele calling time
+
+| Dataset | Organism | Genomes | Loci | chewBBACA | chewcall | Speedup |
+|---------|----------|---------|------|-----------|----------|---------|
+| Consortium | *L. monocytogenes* | 1,426 | 1,748 | 156s | 38.5s | **4.1x** |
+| Consortium | *S. enterica* | 1,540 | 8,558 | 586s | 147s | **4.0x** |
+| Consortium | *E. coli* | 308 | 7,601 | 570s | 97s | **5.9x** |
+| Consortium | *C. jejuni* | 610 | 2,794 | 215s | 49.5s | **4.3x** |
+| Public | *L. monocytogenes* | 1,874 | 1,748 | 203s | 53.6s | **3.8x** |
+| Public | *S. enterica* | 1,434 | 8,558 | 690s | 191.7s | **3.6x** |
+| Public | *E. coli* | 1,999 | 7,601 | 1,615s | 417.8s | **3.9x** |
+| Public | *C. jejuni* | 3,076 | 2,794 | 477s | 118.9s | **4.0x** |
+
 ## Algorithm
 
 chewcall follows the same pipeline as chewBBACA AlleleCall:
@@ -211,15 +218,15 @@ chewcall follows the same pipeline as chewBBACA AlleleCall:
 
 - **SIMD Smith-Waterman** via [parasail](https://github.com/jeffdaily/parasail) (AVX2/SSE4.1) replaces BLASTp. Same BLOSUM62 matrix and affine gap penalties (open=11, extend=1).
 - **Minimizer pre-filter** replaces BLASTp's internal word seeding. Top-5 candidates per query by shared minimizer count.
-- **No BLAST dependency** — only requires parasail shared library.
-- **Read-only schema** — novel alleles are written to `novel_alleles.fasta` but not appended to the schema.
+- **No BLAST dependency** — only requires parasail shared library (optional `--mode compatible` uses external BLAST).
+- **Read-only schema by default** — novel alleles go to `novel_alleles.fasta`; use `--update-schema` to append them to the schema.
 - **Optional GPU mode** via CUDA for large-scale alignment batches.
 
 ## Limitations
 
 - **AlleleCall only** — chewcall reimplements only the AlleleCall algorithm. Schema creation, evaluation, and other chewBBACA modules are not included.
 - **CDS prediction** — chewcall does not include a built-in gene predictor. CDS must be pre-computed using the included `predict_cds.py` script (based on [pyrodigal](https://github.com/althonos/pyrodigal)).
-- **Read-only schema** — unlike chewBBACA, chewcall does **not** update the schema in place. Novel alleles (INF) are written to `novel_alleles.fasta` in the output directory but are not appended to the schema FASTA files.
+- **Read-only schema by default** — novel alleles (INF) are written to `novel_alleles.fasta` in the output directory. Use `--update-schema` to also append them to the schema FASTA files in place (matching chewBBACA behavior).
 - **GPU mode** — experimental CUDA support is included but not yet production-ready for very large batches.
 - **Not a fork** — this is an independent reimplementation inspired by chewBBACA, not a fork of the original Python codebase.
 

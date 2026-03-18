@@ -1289,6 +1289,17 @@ pub fn run_allele_call(
         &novel_alleles,
     )?;
 
+    // Update schema in place if requested
+    if config.update_schema {
+        output::update_schema_fasta(
+            schema_dir,
+            &novel_alleles,
+            &loci_list,
+        )?;
+        let n = novel_alleles.len();
+        eprintln!("[Schema] Appended {n} novel alleles to schema FASTA files.");
+    }
+
     output::write_contigs_info(
         &output_dir.join("results_contigsInfo.tsv"),
         &contigs_info,

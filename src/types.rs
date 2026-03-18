@@ -159,6 +159,7 @@ pub struct Config {
     pub align_mode: AlignMode,     // fast (parasail) or compatible (BLAST)
     pub blastp_path: String,       // path to blastp binary
     pub cds_input: bool,           // true if --cds-input was used (skip PLOT classification)
+    pub update_schema: bool,       // append novel alleles to schema FASTA files
 }
 
 impl Default for Config {
@@ -175,6 +176,7 @@ impl Default for Config {
             align_mode: AlignMode::Fast,
             blastp_path: "blastp".to_string(),
             cds_input: false,
+            update_schema: false,
         }
     }
 }

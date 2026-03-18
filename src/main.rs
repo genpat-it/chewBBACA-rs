@@ -81,6 +81,11 @@ struct Cli {
     /// Path to blastp binary (required for --mode compatible)
     #[arg(long)]
     blastp_path: Option<PathBuf>,
+
+    /// Update schema in place: append novel alleles (INF) to the schema FASTA files.
+    /// By default, chewcall is read-only and writes novel alleles only to the output directory.
+    #[arg(long)]
+    update_schema: bool,
 }
 
 fn main() {
@@ -117,6 +122,7 @@ fn main() {
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_else(|| "blastp".to_string()),
         cds_input: cli.cds_input.is_some(),
+        update_schema: cli.update_schema,
     };
 
     // Discover genome files

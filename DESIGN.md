@@ -187,35 +187,47 @@ Compatible with schemas from:
 
 ## Validation
 
-Validated against chewBBACA v3.3.10 on full BeONE datasets (up to 1540 genomes per organism, 8 CPU threads). Both tools use the same pre-computed CDS (pyrodigal) to ensure identical gene predictions. CRC32 hashing maps each allele to the hash of its DNA sequence, making the comparison independent of allele ID numbering.
+Validated against chewBBACA v3.5.3 on 8 BeONE datasets (4 consortium + 4 public, up to 3,076 genomes per organism, 8 CPU threads). Both tools use the same pre-computed CDS (pyrodigal) to ensure identical gene predictions. CRC32 hashing maps each allele to the hash of its DNA sequence, making the comparison independent of allele ID numbering.
 
 ### wgMLST (all loci)
 
-| Organism | Genomes | Loci | Cells | CRC32 match |
-|----------|---------|------|-------|-------------|
-| *L. monocytogenes* | 1,426 | 1,748 | 2,492,648 | 100.0000% (1 diff) |
-| *S. enterica* | 1,540 | 8,558 | 13,179,320 | 99.9985% (204 diffs) |
-| *E. coli* | 308 | 7,601 | 2,341,108 | 99.9935% (152 diffs) |
-| *C. jejuni* | 610 | 2,794 | 1,704,340 | 99.9765% (401 diffs) |
+| Dataset | Organism | Genomes | Loci | Cells | Diffs | CRC32 match |
+|---------|----------|---------|------|-------|-------|-------------|
+| Consortium | *L. monocytogenes* | 1,426 | 1,748 | 2,492,648 | 1 | 100.0000% |
+| Consortium | *S. enterica* | 1,540 | 8,558 | 13,179,320 | 204 | 99.9985% |
+| Consortium | *E. coli* | 308 | 7,601 | 2,341,108 | 152 | 99.9935% |
+| Consortium | *C. jejuni* | 610 | 2,794 | 1,704,340 | 401 | 99.9765% |
+| Public | *L. monocytogenes* | 1,874 | 1,748 | 3,275,752 | 1 | 100.0000% |
+| Public | *S. enterica* | 1,434 | 8,558 | 12,272,172 | 1,682 | 99.9863% |
+| Public | *E. coli* | 1,999 | 7,601 | 15,194,399 | 1,633 | 99.9893% |
+| Public | *C. jejuni* | 3,076 | 2,794 | 8,594,344 | 1,803 | 99.9790% |
 
 ### Core genome (cgMLST)
 
-| Organism | Core >=95% (loci) | Diffs | Core >=98% (loci) | Diffs | Core >=99% (loci) | Diffs |
-|----------|-------------------|-------|-------------------|-------|-------------------|-------|
-| *L. monocytogenes* | 1,731 | 1 | 1,721 | 1 | 1,716 | 1 |
-| *S. enterica* | 3,259 | 77 | 3,027 | 37 | 2,765 | 16 |
-| *E. coli* | 2,809 | 0 | 2,592 | 0 | 2,470 | 0 |
-| *C. jejuni* | 991 | 0 | 900 | 0 | 706 | 0 |
+| Dataset | Organism | Core >=95% | Diffs | Core >=98% | Diffs | Core >=99% | Diffs |
+|---------|----------|------------|-------|------------|-------|------------|-------|
+| Consortium | *L. monocytogenes* | 1,731 | 1 | 1,721 | 1 | 1,716 | 1 |
+| Consortium | *S. enterica* | 3,259 | 77 | 3,027 | 37 | 2,765 | 16 |
+| Consortium | *E. coli* | 2,809 | 0 | 2,592 | 0 | 2,470 | 0 |
+| Consortium | *C. jejuni* | 991 | 0 | 900 | 0 | 706 | 0 |
+| Public | *L. monocytogenes* | 1,730 | 1 | 1,717 | 1 | 1,691 | 1 |
+| Public | *S. enterica* | 3,045 | 1,438 | 2,905 | 1,437 | 2,752 | 30 |
+| Public | *E. coli* | 2,797 | 6 | 2,629 | 6 | 2,412 | 6 |
+| Public | *C. jejuni* | 1,006 | 6 | 983 | 6 | 927 | 6 |
 
 Remaining differences are confined to accessory loci with borderline BSR scores, where parasail exact SW and BLASTp heuristics disagree. These do not affect cgMLST-based epidemiological analysis.
 
 ## Performance
 
-Benchmarked on full BeONE datasets (8 CPU threads, fast mode):
+Benchmarked on 8 BeONE datasets (8 CPU threads, fast mode):
 
-| Organism | Genomes | Loci | chewBBACA | chewcall (fast) | Speedup |
-|----------|---------|------|-----------|-----------------|---------|
-| *L. monocytogenes* | 1,426 | 1,748 | 156s | 38.5s | **4.1x** |
-| *S. enterica* | 1,540 | 8,558 | 586s | 147s | **4.0x** |
-| *E. coli* | 308 | 7,601 | 570s | 97s | **5.9x** |
-| *C. jejuni* | 610 | 2,794 | 215s | 49.5s | **4.3x** |
+| Dataset | Organism | Genomes | Loci | chewBBACA | chewcall (fast) | Speedup |
+|---------|----------|---------|------|-----------|-----------------|---------|
+| Consortium | *L. monocytogenes* | 1,426 | 1,748 | 156s | 38.5s | **4.1x** |
+| Consortium | *S. enterica* | 1,540 | 8,558 | 586s | 147s | **4.0x** |
+| Consortium | *E. coli* | 308 | 7,601 | 570s | 97s | **5.9x** |
+| Consortium | *C. jejuni* | 610 | 2,794 | 215s | 49.5s | **4.3x** |
+| Public | *L. monocytogenes* | 1,874 | 1,748 | 203s | 53.6s | **3.8x** |
+| Public | *S. enterica* | 1,434 | 8,558 | 690s | 191.7s | **3.6x** |
+| Public | *E. coli* | 1,999 | 7,601 | 1,615s | 417.8s | **3.9x** |
+| Public | *C. jejuni* | 3,076 | 2,794 | 477s | 118.9s | **4.0x** |

@@ -281,6 +281,75 @@ fn format_hashed_cell(
     }
 }
 
+/// Append novel alleles to the schema FASTA files in place.
+///
+/// For each novel allele, finds the corresponding locus FASTA file and appends
+/// the DNA sequence with a header `>locus_name_*N` (where N is the next allele ID,
+/// `*` prefix indicates inferred allele, matching chewBBACA convention).
+pub fn update_schema_fasta(
+    schema_dir: &Path,
+    novel_alleles: &[(String, Vec<u8>)],  // (header, dna_seq) — header is "locus_cdsid"
+    loci_list: &[String],
+) -> std::io::Result<()> {
+    use std::collections::HashMap;
+
+    if novel_alleles.is_empty() {
+        return Ok(());
+    }
+
+    // Group novel alleles by locus name
+    let mut by_locus: HashMap<&str, Vec<&Vec<u8>>> = HashMap::new();
+    for (header, seq) in novel_alleles {
+        // Header format: "locus_name_cdsid" — find which locus matches
+        for locus_name in loci_list {
+            if header.starts_with(locus_name) && header.as_bytes().get(locus_name.len()) == Some(&b'_') {
+                by_locus.entry(locus_name.as_str()).or_default().push(seq);
+                break;
+            }
+        }
+    }
+
+    // For each locus, find the max allele ID and append
+    for (locus_name, seqs) in &by_locus {
+        let fasta_path = schema_dir.join(format!("{}.fasta", locus_name));
+        if !fasta_path.exists() {
+            eprintln!("[Schema] Warning: {} not found, skipping", fasta_path.display());
+            continue;
+        }
+
+        // Find max allele ID in existing FASTA
+        let mut max_id: u32 = 0;
+        let content = std::fs::read_to_string(&fasta_path)?;
+        for line in content.lines() {
+            if let Some(header) = line.strip_prefix('>') {
+                // Header format: "locus_name_N" or "locus_name_*N"
+                let suffix = header.strip_prefix(locus_name).and_then(|s| s.strip_prefix('_'));
+                if let Some(id_str) = suffix {
+                    let id_str = id_str.trim_start_matches('*');
+                    if let Ok(id) = id_str.parse::<u32>() {
+                        max_id = max_id.max(id);
+                    }
+                }
+            }
+        }
+
+        // Append novel alleles
+        let file = std::fs::OpenOptions::new().append(true).open(&fasta_path)?;
+        let mut w = BufWriter::new(file);
+        let mut next_id = max_id + 1;
+        for seq in seqs {
+            writeln!(w, ">{}_{}", locus_name, next_id)?;
+            for chunk in seq.chunks(80) {
+                w.write_all(chunk)?;
+                writeln!(w)?;
+            }
+            next_id += 1;
+        }
+    }
+
+    Ok(())
+}
+
 /// Info for one CDS-locus match (for contigsInfo output).
 #[derive(Debug)]
 pub struct ContigInfo {

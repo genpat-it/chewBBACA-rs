@@ -76,6 +76,43 @@ DATASETS = {
         'chewie_sc': '1',
         'schema_type': 'wgMLST',
     },
+    # BeONE public isolates (same schemas, different genomes)
+    'lm_public': {
+        'name': 'Listeria monocytogenes (public)',
+        'short': 'Lm-pub',
+        'zenodo_url': 'https://zenodo.org/api/records/7230003/files/Lm_public.zip/content',
+        'zenodo_zip': 'Lm_public.zip',
+        'chewie_sp': '18',
+        'chewie_sc': '1',
+        'schema_type': 'cgMLST',
+    },
+    'se_public': {
+        'name': 'Salmonella enterica (public)',
+        'short': 'Se-pub',
+        'zenodo_url': 'https://zenodo.org/api/records/7230091/files/Se_public.zip/content',
+        'zenodo_zip': 'Se_public.zip',
+        'chewie_sp': '14',
+        'chewie_sc': '1',
+        'schema_type': 'wgMLST',
+    },
+    'ec_public': {
+        'name': 'Escherichia coli (public)',
+        'short': 'Ec-pub',
+        'zenodo_url': 'https://zenodo.org/api/records/7230102/files/Ec_public.zip/content',
+        'zenodo_zip': 'Ec_public.zip',
+        'chewie_sp': '10',
+        'chewie_sc': '1',
+        'schema_type': 'wgMLST',
+    },
+    'cj_public': {
+        'name': 'Campylobacter jejuni (public)',
+        'short': 'Cj-pub',
+        'zenodo_url': 'https://zenodo.org/api/records/7230105/files/Cj_public.zip/content',
+        'zenodo_zip': 'Cj_public.zip',
+        'chewie_sp': '6',
+        'chewie_sc': '1',
+        'schema_type': 'wgMLST',
+    },
 }
 
 # ── Configuration ───────────────────────────────────────────────────────────
