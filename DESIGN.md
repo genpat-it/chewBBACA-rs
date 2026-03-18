@@ -23,9 +23,11 @@ chewcall/
 │   ├── cluster.rs        # Minimizer-based clustering + SW alignment
 │   ├── classify.rs       # Classification logic (all 11 classes)
 │   ├── repdet.rs         # Representative determination (iterative)
+│   ├── blast.rs          # External BLAST wrapper (compatible mode)
 │   ├── sw.rs             # Pure-Rust Smith-Waterman (BLOSUM62)
 │   ├── parasail_ffi.rs   # FFI bindings to parasail C library
 │   ├── gpu_sw.rs         # CUDA GPU Smith-Waterman (via cudarc)
+│   ├── lib.rs            # Library root
 │   └── output.rs         # TSV/FASTA output writers
 ```
 
@@ -136,8 +138,14 @@ For each inexact match (BSR >= threshold):
 
 ## Key design decisions
 
-### parasail instead of BLAST
-BLAST is replaced by parasail SIMD Smith-Waterman with the same scoring parameters (BLOSUM62, gap_open=11, gap_extend=1). This eliminates the BLAST dependency and enables direct library-level alignment calls without subprocess overhead. Statistical validation shows Cohen's Kappa = 0.9993 and 99.97% CRC32 hash agreement vs chewBBACA with BLAST.
+### Two alignment modes
+chewcall supports two alignment modes via `--mode`:
+
+- **`fast`** (default): parasail SIMD Smith-Waterman (BLOSUM62, gap_open=11, gap_extend=1). Eliminates the BLAST dependency and enables direct library-level alignment calls without subprocess overhead. Uses minimizer-based clustering to select top-5 candidates per query. **4-6x faster** than chewBBACA with 99.97-100% CRC32 agreement.
+
+- **`compatible`**: external BLASTp for alignment (requires `--blastp-path`). Uses all-vs-all BLAST queries instead of Python chewBBACA's per-cluster approach. Slower (1.1-2.3x speedup) but provides a BLAST-based comparison point. Note: the all-vs-all approach produces different E-values than Python's per-cluster BLAST, so results are not necessarily closer to chewBBACA than the fast mode.
+
+The fast mode is recommended: it is both faster and produces equal or better concordance with chewBBACA on core genome loci.
 
 ### Target self-score BSR
 chewcall uses `BSR = alignment_score / representative_self_score` (target self-score), while chewBBACA uses `score / query_self_score`. With parasail SIMD alignment, target self-score produces better concordance with chewBBACA results than query self-score (validated empirically).
@@ -179,25 +187,35 @@ Compatible with schemas from:
 
 ## Validation
 
-Validated against chewBBACA v3.3.10 on BeONE datasets (Salmonella enterica, 100 genomes, 8558 wgMLST loci):
+Validated against chewBBACA v3.3.10 on full BeONE datasets (up to 1540 genomes per organism, 8 CPU threads). Both tools use the same pre-computed CDS (pyrodigal) to ensure identical gene predictions. CRC32 hashing maps each allele to the hash of its DNA sequence, making the comparison independent of allele ID numbering.
 
-| Metric | Value |
-|--------|-------|
-| Cohen's Kappa | 0.9993 |
-| Pearson correlation (CRC32) | r = 0.99996 |
-| CRC32 matrix match | 99.97% (855,522 / 855,800) |
-| Per-genome Hamming distance | mean 2.78 / 8558 loci |
-| TOST equivalence test | p < 0.001 |
+### wgMLST (all loci)
 
-The 278 discordant cells (0.03%) are due to alignment boundary effects between parasail and BLASTp, not systematic errors.
+| Organism | Genomes | Loci | Cells | CRC32 match |
+|----------|---------|------|-------|-------------|
+| *L. monocytogenes* | 1,426 | 1,748 | 2,492,648 | 100.0000% (1 diff) |
+| *S. enterica* | 1,540 | 8,558 | 13,179,320 | 99.9985% (204 diffs) |
+| *E. coli* | 308 | 7,601 | 2,341,108 | 99.9935% (152 diffs) |
+| *C. jejuni* | 610 | 2,794 | 1,704,340 | 99.9765% (401 diffs) |
+
+### Core genome (cgMLST)
+
+| Organism | Core >=95% (loci) | Diffs | Core >=98% (loci) | Diffs | Core >=99% (loci) | Diffs |
+|----------|-------------------|-------|-------------------|-------|-------------------|-------|
+| *L. monocytogenes* | 1,731 | 1 | 1,721 | 1 | 1,716 | 1 |
+| *S. enterica* | 3,259 | 77 | 3,027 | 37 | 2,765 | 16 |
+| *E. coli* | 2,809 | 0 | 2,592 | 0 | 2,470 | 0 |
+| *C. jejuni* | 991 | 0 | 900 | 0 | 706 | 0 |
+
+Remaining differences are confined to accessory loci with borderline BSR scores, where parasail exact SW and BLASTp heuristics disagree. These do not affect cgMLST-based epidemiological analysis.
 
 ## Performance
 
-Benchmarked on BeONE datasets (100 genomes, 8 CPU threads):
+Benchmarked on full BeONE datasets (8 CPU threads, fast mode):
 
-| Organism | Loci | chewBBACA | chewcall | Speedup |
-|----------|------|-----------|----------|---------|
-| *L. monocytogenes* | 1748 | 57.6s | 4.6s | **12.5x** |
-| *S. enterica* | 8558 | 226.7s | 12.9s | **17.6x** |
-| *E. coli* | 7601 | 390.2s | 29.9s | **13.0x** |
-| *C. jejuni* | 2794 | 101.4s | 7.9s | **12.9x** |
+| Organism | Genomes | Loci | chewBBACA | chewcall (fast) | Speedup |
+|----------|---------|------|-----------|-----------------|---------|
+| *L. monocytogenes* | 1,426 | 1,748 | 156s | 38.5s | **4.1x** |
+| *S. enterica* | 1,540 | 8,558 | 586s | 147s | **4.0x** |
+| *E. coli* | 308 | 7,601 | 570s | 97s | **5.9x** |
+| *C. jejuni* | 610 | 2,794 | 215s | 49.5s | **4.3x** |

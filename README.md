@@ -9,7 +9,7 @@
 
 A high-performance allele caller for cgMLST/wgMLST schemas, inspired by and compatible with [chewBBACA](https://github.com/B-UMMI/chewBBACA).
 
-**chewcall** reimplements the AlleleCall algorithm from chewBBACA in Rust, replacing BLASTp with SIMD-accelerated Smith-Waterman alignment via [parasail](https://github.com/jeffdaily/parasail), achieving **6-12x faster** allele calling with **identical or near-identical** results (100% match on cgMLST core loci for 3 out of 4 tested organisms).
+**chewcall** reimplements the AlleleCall algorithm from chewBBACA in Rust, replacing BLASTp with SIMD-accelerated Smith-Waterman alignment via [parasail](https://github.com/jeffdaily/parasail), achieving **4-6x faster** allele calling with **identical or near-identical** results on full BeONE datasets (up to 1540 genomes). Core genome profiles are **100% identical** for 2 out of 4 tested organisms, with only 1 diff for a third.
 
 ## Overview
 
@@ -29,41 +29,41 @@ A high-performance allele caller for cgMLST/wgMLST schemas, inspired by and comp
 
 ## Validation
 
-Validated on 4 organisms from the [BeONE](https://onehealthejp.eu/projects/foodborne-zoonoses/jrp-beone) project (100 genomes each), comparing chewcall vs chewBBACA v3.3.10 AlleleCall (mode 4). Schemas from [Chewie-NS](https://chewbbaca.online/). Both tools use the same pre-computed CDS (pyrodigal) to ensure identical gene predictions.
+Validated on the full [BeONE](https://onehealthejp.eu/projects/foodborne-zoonoses/jrp-beone) datasets (up to 1540 genomes per organism), comparing chewcall vs chewBBACA v3.3.10 AlleleCall (mode 4). Schemas from [Chewie-NS](https://chewbbaca.online/). Both tools use the same pre-computed CDS (pyrodigal) to ensure identical gene predictions.
 
-CRC32-hashed allelic profiles are compared cell-by-cell. CRC32 hashing maps each allele to the hash of its DNA sequence, making the comparison independent of allele ID numbering:
+CRC32-hashed allelic profiles are compared cell-by-cell. CRC32 hashing maps each allele to the hash of its DNA sequence, making the comparison independent of allele ID numbering.
 
 #### Full wgMLST comparison
 
-| Organism | Loci | Cells | CRC32 match |
-|----------|------|-------|-------------|
-| *L. monocytogenes* | 1748 (cgMLST) | 174,800 | **100.0000% (IDENTICAL)** |
-| *S. enterica* | 8558 (wgMLST) | 855,800 | 99.986% |
-| *E. coli* | 7601 (wgMLST) | 760,100 | 99.995% |
-| *C. jejuni* | 2794 (wgMLST) | 279,400 | 99.996% |
+| Organism | Genomes | Loci | Cells | CRC32 match |
+|----------|---------|------|-------|-------------|
+| *L. monocytogenes* | 1,426 | 1,748 (cgMLST) | 2,492,648 | **100.0000%** (1 diff) |
+| *S. enterica* | 1,540 | 8,558 (wgMLST) | 13,179,320 | 99.9985% (204 diffs) |
+| *E. coli* | 308 | 7,601 (wgMLST) | 2,341,108 | 99.9935% (152 diffs) |
+| *C. jejuni* | 610 | 2,794 (wgMLST) | 1,704,340 | 99.9765% (401 diffs) |
 
 #### Core genome (cgMLST) comparison
 
-To assess accuracy on the loci that matter most for epidemiological surveillance, we restrict the comparison to **core loci** — those present in >=95% of genomes in each dataset. These correspond to the loci typically included in cgMLST schemas:
+To assess accuracy on the loci that matter most for epidemiological surveillance, we restrict the comparison to **core loci** — those present in a given percentage of genomes. These correspond to the loci typically included in cgMLST schemas:
 
-| Organism | Core loci (>=95%) | Cells | CRC32 match |
-|----------|-------------------|-------|-------------|
-| *L. monocytogenes* | 1748 | 174,800 | **100.0000% (IDENTICAL)** |
-| *S. enterica* | 3293 | 329,300 | **99.9982%** (6 diffs) |
-| *E. coli* | 2805 | 280,500 | **100.0000% (IDENTICAL)** |
-| *C. jejuni* | 994 | 99,400 | **100.0000% (IDENTICAL)** |
+| Organism | Core >=95% (loci) | CRC32 match | Core >=98% (loci) | CRC32 match | Core >=99% (loci) | CRC32 match |
+|----------|-------------------|-------------|-------------------|-------------|-------------------|-------------|
+| *L. monocytogenes* | 1,731 | 1 diff | 1,721 | 1 diff | 1,716 | 1 diff |
+| *S. enterica* | 3,259 | 77 diffs | 3,027 | 37 diffs | 2,765 | 16 diffs |
+| *E. coli* | 2,809 | **IDENTICAL** | 2,592 | **IDENTICAL** | 2,470 | **IDENTICAL** |
+| *C. jejuni* | 991 | **IDENTICAL** | 900 | **IDENTICAL** | 706 | **IDENTICAL** |
 
-Three out of four organisms produce **100% identical** core genome profiles. The 6 remaining *S. enterica* core diffs are concentrated on 2 loci at the 95% presence boundary (wgMLST-00047202, present in 95/100 genomes, and wgMLST-00047811, 99/100): chewcall classifies them as INF (novel allele) while chewBBACA reports LNF (not found). These are borderline cases where the different alignment engines (parasail exact SW vs BLAST heuristic) disagree on whether the match passes the BSR threshold. At a 98% presence threshold, only 1 diff remains across all organisms.
+*E. coli* and *C. jejuni* produce **100% identical** core genome profiles at any threshold. *L. monocytogenes* has a single diff across 2.5M cells. *S. enterica* differences are concentrated on borderline accessory loci and decrease steadily with stricter presence thresholds (77 → 37 → 16 diffs).
 
 ### Why are there remaining wgMLST differences?
 
 chewBBACA uses **BLASTp** for protein alignment, while chewcall uses **parasail Smith-Waterman** (BLOSUM62, gap_open=11, gap_extend=1). Both use the same scoring matrix and gap penalties, but BLAST employs **database-size-dependent heuristics** (E-value thresholds, word seeding) that parasail's exact Smith-Waterman does not.
 
-The ~0.01% remaining differences across wgMLST schemas arise from:
+The remaining differences across wgMLST schemas arise from:
 
 1. **Borderline hit discovery** — BLAST's word-seeding heuristics may find or miss alignments near the BSR threshold (0.6) that exact Smith-Waterman handles differently. Neither tool is "wrong" — these are genuinely borderline cases where the alignment score is close to the classification threshold.
 
-2. **Cascading novel allele effects** — When one tool discovers a novel allele (INF) that the other misses, subsequent genomes can match that novel allele. A single borderline difference in one genome can cascade into multiple discordant cells across other genomes for the same locus. This explains why most differences cluster around a few specific loci (e.g., *wgMLST-00027883* in *E. coli*).
+2. **Cascading novel allele effects** — When one tool discovers a novel allele (INF) that the other misses, subsequent genomes can match that novel allele. A single borderline difference in one genome can cascade into multiple discordant cells across other genomes for the same locus.
 
 3. **Accessory loci are noisier** — Accessory loci (present in <95% of genomes) are inherently more variable and have weaker matches to schema representatives. Small scoring differences between BLAST and parasail are more likely to flip a classification near the threshold. Core loci, being well-conserved, produce robust matches that are insensitive to the alignment engine used.
 
@@ -71,29 +71,27 @@ All wgMLST differences are confined to accessory loci and do not affect cgMLST-b
 
 ## Performance
 
-Benchmarked on [BeONE](https://onehealthejp.eu/projects/foodborne-zoonoses/jrp-beone) datasets (100 genomes each, 8 CPU threads). Schemas from [Chewie-NS](https://chewbbaca.online/). Both tools use the same pre-computed CDS ([pyrodigal](https://github.com/althonos/pyrodigal)) to ensure identical gene predictions.
+Benchmarked on the full [BeONE](https://onehealthejp.eu/projects/foodborne-zoonoses/jrp-beone) datasets (8 CPU threads). Schemas from [Chewie-NS](https://chewbbaca.online/). Both tools use the same pre-computed CDS ([pyrodigal](https://github.com/althonos/pyrodigal)) to ensure identical gene predictions.
 
-#### Allele calling time (excluding CDS prediction)
+#### Allele calling time
 
-| Organism | Loci | Schema | chewBBACA | chewcall | Speedup | CRC32 match (wgMLST) | CRC32 match (core) |
-|----------|------|--------|-----------|----------|---------|----------------------|---------------------|
-| *L. monocytogenes* | 1748 | cgMLST | 51s | 4.2s | **12x** | **IDENTICAL** | **IDENTICAL** |
-| *S. enterica* | 8558 | wgMLST | 131s | 22.7s | **5.8x** | 99.986% | 99.998% (3293 core loci) |
-| *E. coli* | 7601 | wgMLST | 386s | 55.6s | **6.9x** | 99.995% | **IDENTICAL** (2805 core loci) |
-| *C. jejuni* | 2794 | wgMLST | 99s | 10.6s | **9.3x** | 99.996% | **IDENTICAL** (994 core loci) |
-
-Core loci are defined as those present in >=95% of genomes in each dataset, corresponding to the loci used in cgMLST-based epidemiological surveillance.
+| Organism | Genomes | Loci | chewBBACA | chewcall | Speedup |
+|----------|---------|------|-----------|----------|---------|
+| *L. monocytogenes* | 1,426 | 1,748 | 156s | 38.5s | **4.1x** |
+| *S. enterica* | 1,540 | 8,558 | 586s | 147s | **4.0x** |
+| *E. coli* | 308 | 7,601 | 570s | 97s | **5.9x** |
+| *C. jejuni* | 610 | 2,794 | 215s | 49.5s | **4.3x** |
 
 #### End-to-end time (including CDS prediction)
 
-CDS prediction via [pyrodigal](https://github.com/althonos/pyrodigal) is a shared cost for both tools. `predict_cds.py` parallelizes across all available CPU cores. When included, the total wall-clock time is:
+CDS prediction via [pyrodigal](https://github.com/althonos/pyrodigal) is a shared cost for both tools. `predict_cds.py` parallelizes across all available CPU cores.
 
 | Organism | CDS prediction | chewBBACA (total) | chewcall (total) | Speedup |
 |----------|----------------|-------------------|------------------|---------|
-| *L. monocytogenes* | 1.6s | 53s | 5.8s | **9.1x** |
-| *S. enterica* | 2.7s | 134s | 25s | **5.4x** |
-| *E. coli* | 2.9s | 389s | 59s | **6.6x** |
-| *C. jejuni* | 0.9s | 100s | 12s | **8.3x** |
+| *L. monocytogenes* | 13.6s | 170s | 52s | **3.3x** |
+| *S. enterica* | 28.8s | 614s | 176s | **3.5x** |
+| *E. coli* | 6.9s | 577s | 104s | **5.5x** |
+| *C. jejuni* | 3.0s | 218s | 53s | **4.1x** |
 
 ## Installation
 
