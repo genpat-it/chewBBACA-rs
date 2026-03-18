@@ -3,7 +3,6 @@
 //! parasail provides highly optimized SW implementations using SSE4.1, AVX2,
 //! and AVX-512 striped algorithms that auto-detect the best instruction set.
 
-use std::ffi::CStr;
 use std::os::raw::{c_char, c_int};
 
 // --- C types ---

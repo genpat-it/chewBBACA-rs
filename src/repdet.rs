@@ -37,6 +37,10 @@ pub fn iterative_repdet(
         initial_results, &mut remaining, &mut all_results, config,
     );
 
+    // Phase 4 results were already applied by the caller. They are used here
+    // only to seed new representatives and trim the remaining unmatched set.
+    all_results.clear();
+
     if new_reps.is_empty() {
         // No new rep candidates from Phase 4 → nothing more to find
         return all_results;
@@ -102,19 +106,19 @@ fn process_results(
     for result in results {
         if result.best_bsr >= config.bsr_threshold {
             matched_indices.insert(result.cds_idx, true);
+        }
 
-            // Candidates for new representatives: BSR in [threshold, threshold+0.1)
-            if result.best_bsr < config.bsr_threshold + 0.1 {
-                if let Some((_, protein)) = remaining.iter().find(|(idx, _)| *idx == result.cds_idx) {
-                    let self_score = sw::self_score(protein) as f64;
-                    new_reps.push(Representative {
-                        locus_idx: result.best_locus,
-                        seq_id: format!("repdet_{}", result.cds_idx),
-                        protein_seq: protein.clone(),
-                        dna_length: 0,
-                        self_score,
-                    });
-                }
+        // Candidates for new representatives: BSR in [threshold, threshold+0.1)
+        if result.best_bsr < config.bsr_threshold + 0.1 {
+            if let Some((_, protein)) = remaining.iter().find(|(idx, _)| *idx == result.cds_idx) {
+                let self_score = sw::self_score(protein) as f64;
+                new_reps.push(Representative {
+                    locus_idx: result.best_locus,
+                    seq_id: format!("repdet_{}", result.cds_idx),
+                    protein_seq: protein.clone(),
+                    dna_length: 0,
+                    self_score,
+                });
             }
         }
     }
@@ -124,9 +128,11 @@ fn process_results(
         if result.best_bsr >= config.bsr_threshold {
             all_results.push(cluster::ClusterResult {
                 cds_idx: result.cds_idx,
+                representative_idx: result.representative_idx,
                 best_locus: result.best_locus,
                 best_bsr: result.best_bsr,
                 score: result.score,
+                rep_dna_len: result.rep_dna_len,
                 query_start: result.query_start,
                 query_end: result.query_end,
                 query_len: result.query_len,

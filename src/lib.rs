@@ -4,6 +4,7 @@ pub mod schema;
 pub mod cds;
 pub mod dedup;
 pub mod classify;
+pub mod blast;
 pub mod cluster;
 pub mod sw;
 pub mod parasail_ffi;

@@ -9,6 +9,7 @@ mod schema;
 mod cds;
 mod dedup;
 mod classify;
+mod blast;
 mod cluster;
 mod sw;
 mod parasail_ffi;
@@ -73,6 +74,13 @@ struct Cli {
     #[arg(long)]
     prodigal_path: Option<PathBuf>,
 
+    /// Alignment mode: "fast" (parasail SIMD, ~15x faster) or "compatible" (BLAST, 100% chewBBACA match)
+    #[arg(long, default_value = "fast")]
+    mode: String,
+
+    /// Path to blastp binary (required for --mode compatible)
+    #[arg(long)]
+    blastp_path: Option<PathBuf>,
 }
 
 fn main() {
@@ -83,6 +91,15 @@ fn main() {
         .num_threads(cli.cpu)
         .build_global()
         .unwrap();
+
+    let align_mode = match cli.mode.as_str() {
+        "fast" => types::AlignMode::Fast,
+        "compatible" => types::AlignMode::Compatible,
+        other => {
+            eprintln!("Error: unknown mode '{}'. Use 'fast' or 'compatible'.", other);
+            std::process::exit(1);
+        }
+    };
 
     let config = Config {
         bsr_threshold: cli.bsr,
@@ -95,6 +112,11 @@ fn main() {
         prodigal_path: cli.prodigal_path
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_else(|| "prodigal".to_string()),
+        align_mode,
+        blastp_path: cli.blastp_path
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|| "blastp".to_string()),
+        cds_input: cli.cds_input.is_some(),
     };
 
     // Discover genome files

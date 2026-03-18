@@ -17,6 +17,7 @@ pub fn write_alleles_tsv(
     locus_names: &[String],
     // results[genome_idx][locus_idx]
     results: &[Vec<LocusResult>],
+    inferred: &rustc_hash::FxHashSet<(u32, u32)>,
 ) -> std::io::Result<()> {
     let file = File::create(output_path)?;
     let mut w = BufWriter::new(file);
@@ -34,7 +35,7 @@ pub fn write_alleles_tsv(
 
         for locus_idx in 0..locus_names.len() {
             let result = &results[genome_idx][locus_idx];
-            let cell = format_allele_cell(result);
+            let cell = format_allele_cell(result, locus_idx as u32, inferred);
             write!(w, "\t{}", cell)?;
         }
         writeln!(w)?;
@@ -44,11 +45,22 @@ pub fn write_alleles_tsv(
 }
 
 /// Format one cell of the allelic matrix.
-fn format_allele_cell(result: &LocusResult) -> String {
+/// `inferred` tracks alleles that were inferred (had `*` prefix in schema);
+/// novel alleles created during this run are also marked with `*`.
+fn format_allele_cell(
+    result: &LocusResult,
+    locus_idx: u32,
+    inferred: &rustc_hash::FxHashSet<(u32, u32)>,
+) -> String {
     match result.class {
         Classification::EXC => {
             if let Some(id) = result.allele_id {
-                if result.is_novel {
+                // Only mark with '*' if the allele was already inferred in the schema
+                // (had '*' prefix in the schema FASTA header).
+                // Novel alleles discovered during this run are NOT marked with '*'
+                // (matching Python chewBBACA behavior for non-Chewie-NS schemas).
+                let is_inferred = inferred.contains(&(locus_idx, id));
+                if is_inferred {
                     format!("*{}", id)
                 } else {
                     format!("{}", id)
@@ -59,7 +71,7 @@ fn format_allele_cell(result: &LocusResult) -> String {
         }
         Classification::INF => {
             if let Some(id) = result.allele_id {
-                format!("INF-*{}", id)
+                format!("INF-{}", id)
             } else {
                 "INF".to_string()
             }
@@ -74,7 +86,7 @@ fn format_allele_cell(result: &LocusResult) -> String {
 pub fn write_statistics_tsv(
     output_path: &Path,
     genome_names: &[String],
-    locus_names: &[String],
+    _locus_names: &[String],
     results: &[Vec<LocusResult>],
 ) -> std::io::Result<()> {
     let file = File::create(output_path)?;
@@ -258,8 +270,8 @@ fn format_hashed_cell(
                 if let Some(&crc) = allele_crc32.get(&(locus_idx, id)) {
                     format!("{}", crc)
                 } else {
-                    // Fallback: format as normal allele cell
-                    format_allele_cell(result)
+                    // Fallback: just output the ID
+                    format!("{}", id)
                 }
             } else {
                 "-".to_string()

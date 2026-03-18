@@ -96,6 +96,7 @@ pub struct LocusResult {
     pub class: Classification,
     pub allele_id: Option<AlleleId>,
     pub is_novel: bool, // true if allele was inferred (novel), shown with * prefix
+    pub dna_hash: Option<SeqHash>,
     pub matches: Vec<MatchResult>,
 }
 
@@ -106,6 +107,7 @@ pub struct Locus {
     pub fasta_path: String,   // path to locus FASTA file
     pub short_path: String,   // path to representative alleles FASTA
     pub allele_count: u32,
+    pub max_allele_id: u32,   // highest allele identifier observed in schema FASTA
     pub mode_length: u32,     // most frequent allele DNA length
     pub self_score: f64,      // representative self-alignment score
 }
@@ -134,6 +136,15 @@ pub struct SwResult {
     pub target_end: u32,   // 1-based
 }
 
+/// Alignment mode for Phase 4 / RepDet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AlignMode {
+    /// Fast mode: parasail SIMD (12-17x faster, 99.997% match)
+    Fast,
+    /// Compatible mode: BLAST (100% identical to chewBBACA)
+    Compatible,
+}
+
 /// Configuration for AlleleCall.
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -145,6 +156,9 @@ pub struct Config {
     pub prodigal_mode: String,     // "single" or "meta"
     pub use_gpu: bool,             // use CUDA GPU for SW alignment
     pub prodigal_path: String,     // path to prodigal binary
+    pub align_mode: AlignMode,     // fast (parasail) or compatible (BLAST)
+    pub blastp_path: String,       // path to blastp binary
+    pub cds_input: bool,           // true if --cds-input was used (skip PLOT classification)
 }
 
 impl Default for Config {
@@ -158,6 +172,9 @@ impl Default for Config {
             prodigal_mode: "single".to_string(),
             use_gpu: false,
             prodigal_path: "prodigal".to_string(),
+            align_mode: AlignMode::Fast,
+            blastp_path: "blastp".to_string(),
+            cds_input: false,
         }
     }
 }

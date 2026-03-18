@@ -2,7 +2,7 @@
 
 use std::path::Path;
 use rayon::prelude::*;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::types::*;
 use crate::schema;
@@ -12,8 +12,469 @@ use crate::translate;
 use crate::sw;
 use crate::cluster;
 use crate::classify;
-use crate::repdet;
+use crate::blast;
 use crate::output;
+
+#[derive(Clone, Copy)]
+struct BorderlineCandidate {
+    cds_idx: usize,
+    bsr: f64,
+}
+
+fn merge_result(
+    result: &mut LocusResult,
+    incoming_class: Classification,
+    incoming_allele_id: Option<AlleleId>,
+    incoming_is_novel: bool,
+    incoming_dna_hash: Option<SeqHash>,
+) {
+    let previous_class = result.class;
+    let previous_allele_id = result.allele_id;
+    let previous_is_novel = result.is_novel;
+    let previous_dna_hash = result.dna_hash;
+
+    let merged = match result.class {
+        Classification::LNF => incoming_class,
+        Classification::NIPH => Classification::NIPH,
+        Classification::NIPHEM => {
+            if incoming_class == Classification::EXC {
+                Classification::NIPHEM
+            } else {
+                Classification::NIPH
+            }
+        }
+        current => classify::resolve_multi_match(&[current, incoming_class]),
+    };
+
+    result.class = merged;
+    match merged {
+        Classification::EXC | Classification::INF => {
+            if merged == previous_class && previous_allele_id.is_some() {
+                result.allele_id = previous_allele_id;
+                result.is_novel = previous_is_novel;
+                result.dna_hash = previous_dna_hash;
+            } else {
+                result.allele_id = incoming_allele_id;
+                result.is_novel = incoming_is_novel;
+                result.dna_hash = incoming_dna_hash;
+            }
+        }
+        _ => {
+            result.allele_id = None;
+            result.is_novel = false;
+            result.dna_hash = None;
+        }
+    }
+}
+
+fn mark_paralogous_matches(all_results: &mut [Vec<LocusResult>]) {
+    for genome_results in all_results {
+        let mut loci_by_hash: FxHashMap<SeqHash, Vec<usize>> = FxHashMap::default();
+        for (locus_idx, result) in genome_results.iter().enumerate() {
+            if result.class.is_valid() {
+                if let Some(hash) = result.dna_hash {
+                    loci_by_hash.entry(hash).or_default().push(locus_idx);
+                }
+            }
+        }
+
+        for loci in loci_by_hash.values() {
+            if loci.len() <= 1 {
+                continue;
+            }
+            for &locus_idx in loci {
+                let result = &mut genome_results[locus_idx];
+                result.class = Classification::PAMA;
+                result.allele_id = None;
+                result.is_novel = false;
+                result.dna_hash = None;
+            }
+        }
+    }
+}
+
+fn register_novel_allele(
+    schema: &mut schema::Schema,
+    next_allele_id: &mut [AlleleId],
+    novel_alleles: &mut Vec<(String, Vec<u8>)>,
+    loci_list: &[String],
+    locus_idx: usize,
+    cds_item: &Cds,
+    dna_hash: SeqHash,
+) -> AlleleId {
+    let inf_id = next_allele_id[locus_idx];
+    next_allele_id[locus_idx] += 1;
+
+    novel_alleles.push((
+        format!("{}_{}", loci_list[locus_idx], cds_item.id),
+        cds_item.dna_seq.clone(),
+    ));
+
+    let seq_str = String::from_utf8_lossy(&cds_item.dna_seq);
+    schema
+        .allele_crc32
+        .insert((locus_idx as u32, inf_id), crc32fast::hash(seq_str.as_bytes()));
+    schema
+        .dna_hashes
+        .entry(dna_hash)
+        .or_default()
+        .push((locus_idx as u32, inf_id));
+    // Do NOT add novel alleles to inferred_allele_ids — Python only marks
+    // alleles with '*' prefix for Chewie-NS schemas, not for locally-inferred ones.
+
+    inf_id
+}
+
+fn group_hits_by_locus(
+    hits: Vec<cluster::ClusterResult>,
+) -> FxHashMap<usize, Vec<cluster::ClusterResult>> {
+    let mut by_locus: FxHashMap<usize, Vec<cluster::ClusterResult>> = FxHashMap::default();
+    for hit in hits {
+        by_locus.entry(hit.best_locus as usize).or_default().push(hit);
+    }
+    for locus_hits in by_locus.values_mut() {
+        locus_hits.sort_unstable_by(|a, b| b.score.cmp(&a.score).then(a.cds_idx.cmp(&b.cds_idx)));
+    }
+    by_locus
+}
+
+fn process_locus_hits(
+    locus_idx: usize,
+    hits: &[cluster::ClusterResult],
+    bsr_threshold: f64,
+    candidate_upper_bsr: Option<f64>,
+    only_fill_lnf: bool,
+    unmatched_cds: &[&Cds],
+    protein_hashes_by_idx: &FxHashMap<usize, SeqHash>,
+    cds_indices_by_protein_hash: &FxHashMap<SeqHash, Vec<usize>>,
+    hash_to_genomes: &FxHashMap<SeqHash, Vec<(GenomeIdx, String)>>,
+    all_results: &mut [Vec<LocusResult>],
+    next_allele_id: &mut [AlleleId],
+    novel_alleles: &mut Vec<(String, Vec<u8>)>,
+    schema: &mut schema::Schema,
+    loci_list: &[String],
+    config: &Config,
+)-> (FxHashSet<usize>, Vec<usize>) {
+    let mut seen_dna: FxHashMap<SeqHash, AlleleId> = FxHashMap::default();
+    let mut seen_prot: FxHashSet<SeqHash> = FxHashSet::default();
+    let mut excluded_cds: FxHashSet<usize> = FxHashSet::default();
+    let mut first_inf_by_genome: FxHashMap<usize, BorderlineCandidate> = FxHashMap::default();
+    let debug_loci: Option<FxHashSet<String>> = std::env::var("CHEWCALL_DEBUG_LOCI")
+        .ok()
+        .map(|value| {
+            value.split(',')
+                .map(str::trim)
+                .filter(|entry| !entry.is_empty())
+                .map(str::to_owned)
+                .collect()
+        });
+    let debug_genomes: Option<FxHashSet<usize>> = std::env::var("CHEWCALL_DEBUG_GENOMES")
+        .ok()
+        .map(|value| {
+            value.split(',')
+                .map(str::trim)
+                .filter(|entry| !entry.is_empty())
+                .filter_map(|entry| entry.parse::<usize>().ok())
+                .collect()
+        });
+
+    for hit in hits {
+        if hit.best_bsr < bsr_threshold {
+            continue;
+        }
+
+        let Some(&protein_hash) = protein_hashes_by_idx.get(&hit.cds_idx) else {
+            continue;
+        };
+        let related_cds_indices = cds_indices_by_protein_hash
+            .get(&protein_hash)
+            .map(Vec::as_slice)
+            .unwrap_or(std::slice::from_ref(&hit.cds_idx));
+
+        for &related_cds_idx in related_cds_indices {
+            let cds_item = unmatched_cds[related_cds_idx];
+            let dna_upper: Vec<u8> =
+                cds_item.dna_seq.iter().map(|b| b.to_ascii_uppercase()).collect();
+            let dna_hash = schema::sha256(&dna_upper);
+
+            let class = if seen_dna.contains_key(&dna_hash) {
+                Classification::EXC
+            } else if seen_prot.contains(&protein_hash) {
+                Classification::INF
+            } else {
+                classify::classify_inexact(
+                    hit.best_bsr,
+                    config.bsr_threshold,
+                    cds_item.dna_seq.len() as u32,
+                    schema.loci[locus_idx].mode_length,
+                    config.size_threshold,
+                    cds_item.coord.as_ref(),
+                    hit.rep_dna_len,
+                    hit.target_start,
+                    hit.target_end,
+                    hit.target_len,
+                    config.cds_input,
+                )
+            };
+
+            if class == Classification::LNF {
+                continue;
+            }
+
+            let Some(genomes) = hash_to_genomes.get(&dna_hash) else {
+                continue;
+            };
+            let mut sorted_genomes: Vec<_> = genomes.iter().collect();
+            sorted_genomes.sort_by_key(|(gi, _)| *gi);
+
+            let mut allele_id = seen_dna.get(&dna_hash).copied();
+
+            for (genome_pos, &&(genome_idx, _)) in sorted_genomes.iter().enumerate() {
+                let gi = genome_idx as usize;
+                if gi >= all_results.len() || locus_idx >= all_results[gi].len() {
+                    continue;
+                }
+                if debug_loci
+                    .as_ref()
+                    .map(|wanted| wanted.contains(loci_list[locus_idx].as_str()))
+                    .unwrap_or(false)
+                    && debug_genomes
+                        .as_ref()
+                        .map(|wanted| wanted.contains(&gi))
+                        .unwrap_or(true)
+                {
+                    eprintln!(
+                        "DEBUG locus={} genome_idx={} phase={} cds_idx={} cds_id={} cds_len={} coord={} current={} incoming={} bsr={:.4} rep_dna_len={} target={}..{}/{}",
+                        loci_list[locus_idx],
+                        gi,
+                        if candidate_upper_bsr.is_some() { "repdet" } else { "phase4" },
+                        related_cds_idx,
+                        cds_item.id,
+                        cds_item.dna_seq.len(),
+                        cds_item
+                            .coord
+                            .as_ref()
+                            .map(|coord| format!("{}:{}-{}:{}", coord.contig, coord.start, coord.stop, coord.strand))
+                            .unwrap_or_else(|| "-".to_owned()),
+                        all_results[gi][locus_idx].class.as_str(),
+                        class.as_str(),
+                        hit.best_bsr,
+                        hit.rep_dna_len,
+                        hit.target_start,
+                        hit.target_end,
+                        hit.target_len,
+                    );
+                }
+                if only_fill_lnf && all_results[gi][locus_idx].class != Classification::LNF {
+                    continue;
+                }
+                if all_results[gi][locus_idx].class == Classification::EXC
+                    && matches!(
+                        class,
+                        Classification::PLOT3 | Classification::PLOT5 | Classification::LOTSC
+                    )
+                {
+                    continue;
+                }
+                if candidate_upper_bsr.is_some()
+                    && all_results[gi][locus_idx].class == Classification::EXC
+                    && class != Classification::EXC
+                    && hit.rep_dna_len <= 300
+                    && hit.best_bsr < config.bsr_threshold + 0.02
+                {
+                    continue;
+                }
+                match class {
+                    Classification::INF => {
+                        let aid = *allele_id.get_or_insert_with(|| {
+                            register_novel_allele(
+                                schema,
+                                next_allele_id,
+                                novel_alleles,
+                                loci_list,
+                                locus_idx,
+                                cds_item,
+                                dna_hash,
+                            )
+                        });
+                        let incoming_class =
+                            if genome_pos == 0 && !seen_dna.contains_key(&dna_hash) {
+                                Classification::INF
+                            } else {
+                                Classification::EXC
+                            };
+                        merge_result(
+                            &mut all_results[gi][locus_idx],
+                            incoming_class,
+                            Some(aid),
+                            true,
+                            Some(dna_hash),
+                        );
+                        if incoming_class == Classification::INF {
+                            first_inf_by_genome.entry(gi).or_insert(BorderlineCandidate {
+                                cds_idx: related_cds_idx,
+                                bsr: hit.best_bsr,
+                            });
+                        }
+                    }
+                    Classification::EXC => {
+                        let Some(aid) = allele_id else {
+                            continue;
+                        };
+                        merge_result(
+                            &mut all_results[gi][locus_idx],
+                            Classification::EXC,
+                            Some(aid),
+                            true,
+                            Some(dna_hash),
+                        );
+                    }
+                    other => {
+                        merge_result(&mut all_results[gi][locus_idx], other, None, false, None);
+                    }
+                }
+            }
+
+            if class == Classification::INF {
+                if let Some(aid) = allele_id {
+                    seen_dna.insert(dna_hash, aid);
+                }
+                seen_prot.insert(protein_hash);
+            }
+            if class != Classification::EXC {
+                excluded_cds.insert(related_cds_idx);
+            } else if seen_dna.contains_key(&dna_hash) {
+                excluded_cds.insert(related_cds_idx);
+            }
+        }
+    }
+
+    let mut candidates = Vec::new();
+    if let Some(upper_bsr) = candidate_upper_bsr {
+        let mut candidate_set: FxHashSet<usize> = FxHashSet::default();
+        for (genome_idx, info) in first_inf_by_genome {
+            if all_results[genome_idx][locus_idx].class == Classification::INF
+                && info.bsr >= bsr_threshold
+                && info.bsr < upper_bsr
+                && candidate_set.insert(info.cds_idx)
+            {
+                candidates.push(info.cds_idx);
+            }
+        }
+        candidates.sort_unstable();
+    }
+
+    (excluded_cds, candidates)
+}
+
+fn select_new_representatives(
+    candidate_cds_by_locus: &FxHashMap<usize, Vec<usize>>,
+    unmatched_cds: &[&Cds],
+    proteins_by_idx: &FxHashMap<usize, Vec<u8>>,
+    bsr_threshold: f64,
+) -> Vec<Representative> {
+    use crate::parasail_ffi;
+
+    let mut selected = Vec::new();
+    let mut loci: Vec<_> = candidate_cds_by_locus.keys().copied().collect();
+    loci.sort_unstable();
+
+    for locus_idx in loci {
+        let mut cds_indices = candidate_cds_by_locus[&locus_idx].clone();
+        cds_indices.sort_unstable();
+        cds_indices.dedup();
+
+        if let Some(selected_indices) =
+            blast::select_representative_candidates(&cds_indices, proteins_by_idx, bsr_threshold)
+        {
+            for cds_idx in selected_indices {
+                let Some(protein_seq) = proteins_by_idx.get(&cds_idx) else {
+                    continue;
+                };
+                let cds_item = unmatched_cds[cds_idx];
+                selected.push(Representative {
+                    locus_idx: locus_idx as u32,
+                    seq_id: cds_item.id.clone(),
+                    protein_seq: protein_seq.clone(),
+                    dna_length: cds_item.dna_seq.len() as u32,
+                    self_score: sw::self_score(protein_seq) as f64,
+                });
+            }
+            continue;
+        }
+
+        let mut self_scores: FxHashMap<usize, f64> = FxHashMap::default();
+        for &cds_idx in &cds_indices {
+            if let Some(protein) = proteins_by_idx.get(&cds_idx) {
+                self_scores.insert(cds_idx, sw::self_score(protein) as f64);
+            }
+        }
+
+        let mut ordered = cds_indices;
+        ordered.sort_unstable_by(|a, b| {
+            let len_a = proteins_by_idx.get(a).map(|p| p.len()).unwrap_or(0);
+            let len_b = proteins_by_idx.get(b).map(|p| p.len()).unwrap_or(0);
+            len_a.cmp(&len_b).then(a.cmp(b))
+        });
+
+        let mut excluded: FxHashSet<usize> = FxHashSet::default();
+        for &query_idx in &ordered {
+            if excluded.contains(&query_idx) {
+                continue;
+            }
+            let Some(query) = proteins_by_idx.get(&query_idx) else {
+                continue;
+            };
+            let Some(&self_score) = self_scores.get(&query_idx) else {
+                continue;
+            };
+            if self_score <= 0.0 {
+                continue;
+            }
+
+            for &target_idx in &ordered {
+                if query_idx == target_idx {
+                    continue;
+                }
+                let Some(target) = proteins_by_idx.get(&target_idx) else {
+                    continue;
+                };
+                let (score, _, _) = parasail_ffi::sw_simd(query, target);
+                let bsr = score as f64 / self_score;
+                if bsr >= bsr_threshold + 0.1 {
+                    excluded.insert(target_idx);
+                }
+            }
+        }
+
+        for cds_idx in ordered {
+            if excluded.contains(&cds_idx) {
+                continue;
+            }
+            let Some(protein_seq) = proteins_by_idx.get(&cds_idx) else {
+                continue;
+            };
+            let Some(&self_score) = self_scores.get(&cds_idx) else {
+                continue;
+            };
+            let cds_item = unmatched_cds[cds_idx];
+            selected.push(Representative {
+                locus_idx: locus_idx as u32,
+                seq_id: cds_item.id.clone(),
+                protein_seq: protein_seq.clone(),
+                dna_length: cds_item.dna_seq.len() as u32,
+                self_score,
+            });
+        }
+    }
+
+    selected.sort_unstable_by(|a, b| {
+        a.locus_idx
+            .cmp(&b.locus_idx)
+            .then(a.seq_id.cmp(&b.seq_id))
+    });
+    selected
+}
 
 /// Run the full AlleleCall pipeline.
 pub fn run_allele_call(
@@ -73,12 +534,44 @@ pub fn run_allele_call(
 
     // Compute (or load cached) self-scores for representatives
     let cache_path = schema_dir.join("short").join("self_scores_rs.tsv");
-    let cached = load_self_scores_cache(&cache_path, num_loci);
+    let cached = load_self_scores_cache(&cache_path, &schema.representatives);
 
-    if let Some(scores) = cached {
+    // In compatible mode, compute self-scores via BLAST (not parasail)
+    let use_blast_scores = config.align_mode == crate::types::AlignMode::Compatible;
+
+    if let Some(scores) = cached.filter(|_| !use_blast_scores) {
         eprintln!("[Phase 0] Loading cached self-scores...");
         for (i, rep) in schema.representatives.iter_mut().enumerate() {
             rep.self_score = scores[i];
+        }
+    } else if use_blast_scores {
+        // Try loading from Python pickle first (authoritative), then BLAST cache, then recompute
+        let blast_cache = schema_dir.join("short").join("self_scores_blast.tsv");
+        let python_pickle = schema_dir.join("short").join("self_scores");
+        if let Some(pickle_scores) = load_python_self_scores_pickle(&python_pickle, &schema.representatives) {
+            eprintln!("[Phase 0] Loading self-scores from Python pickle...");
+            for (i, rep) in schema.representatives.iter_mut().enumerate() {
+                rep.self_score = pickle_scores[i];
+            }
+            save_self_scores_cache(&blast_cache, &schema.representatives);
+        } else if let Some(scores) = load_self_scores_cache(&blast_cache, &schema.representatives) {
+            eprintln!("[Phase 0] Loading cached BLAST self-scores...");
+            for (i, rep) in schema.representatives.iter_mut().enumerate() {
+                rep.self_score = scores[i];
+            }
+        } else {
+            eprintln!("[Phase 0] Computing BLAST self-scores (compatible mode)...");
+            let blast_scores = blast::blast_self_scores(
+                &schema.representatives, &config.blastp_path, config.cpu_cores,
+            );
+            for (i, rep) in schema.representatives.iter_mut().enumerate() {
+                if let Some(&score) = blast_scores.get(&i) {
+                    rep.self_score = score;
+                } else {
+                    rep.self_score = sw::self_score(&rep.protein_seq) as f64;
+                }
+            }
+            save_self_scores_cache(&blast_cache, &schema.representatives);
         }
     } else {
         eprintln!("[Phase 0] Computing representative self-scores...");
@@ -86,10 +579,16 @@ pub fn run_allele_call(
             let score = sw::self_score(&rep.protein_seq);
             rep.self_score = score as f64;
         }
-        save_self_scores_cache(&cache_path, &schema.representatives, &loci_list);
+        save_self_scores_cache(&cache_path, &schema.representatives);
     }
-    for (i, rep) in schema.representatives.iter().enumerate() {
-        schema.loci[i].self_score = rep.self_score;
+    for locus in &mut schema.loci {
+        locus.self_score = 0.0;
+    }
+    for rep in &schema.representatives {
+        let locus = &mut schema.loci[rep.locus_idx as usize];
+        if rep.self_score > locus.self_score {
+            locus.self_score = rep.self_score;
+        }
     }
 
     let num_genomes = genome_paths.len();
@@ -102,7 +601,9 @@ pub fn run_allele_call(
                 .map(|_| LocusResult {
                     class: Classification::LNF,
                     allele_id: None,
-                    is_novel: false, matches: Vec::new(),
+                    is_novel: false,
+                    dna_hash: None,
+                    matches: Vec::new(),
                 })
                 .collect()
         })
@@ -113,7 +614,7 @@ pub fn run_allele_call(
 
     // Track next allele ID per locus (for INF assignments)
     let mut next_allele_id: Vec<AlleleId> = schema.loci.iter()
-        .map(|l| l.allele_count + 1)
+        .map(|l| l.max_allele_id + 1)
         .collect();
 
     // --- Phase 1: CDS prediction (parallel per genome) ---
@@ -127,9 +628,19 @@ pub fn run_allele_call(
 
             // Check for pre-computed CDS
             if let Some(cds_dir) = cds_input_dir {
-                let cds_file = cds_dir.join(format!("{}.cds.fasta", genome_stem));
+                // Strip .cds suffix if present (e.g., "Se_0001.cds" → "Se_0001")
+                let stem_str = genome_stem.to_string();
+                let base_stem = stem_str.strip_suffix(".cds").unwrap_or(&stem_str);
+                let cds_file = cds_dir.join(format!("{}.cds.fasta", base_stem));
                 if cds_file.exists() {
                     return cds::load_precomputed_cds(&cds_file, genome_idx as GenomeIdx);
+                }
+                // Fallback: try genome file itself as CDS (when -i and --cds-input point to same dir)
+                if let Some(fname) = genome_path.file_name() {
+                    let alt = cds_dir.join(fname);
+                    if alt.exists() {
+                        return cds::load_precomputed_cds(&alt, genome_idx as GenomeIdx);
+                    }
                 }
             }
 
@@ -201,16 +712,13 @@ pub fn run_allele_call(
                         let gi = genome_idx as usize;
                         let li = locus_idx as usize;
                         if gi < all_results.len() && li < num_loci {
-                            if all_results[gi][li].class == Classification::LNF {
-                                all_results[gi][li] = LocusResult {
-                                    class: Classification::EXC,
-                                    allele_id: Some(allele_id),
-                                    is_novel: false, matches: Vec::new(),
-                                };
-                            } else if all_results[gi][li].class == Classification::EXC {
-                                // Multiple EXC matches for same locus → NIPHEM
-                                all_results[gi][li].class = Classification::NIPHEM;
-                            }
+                            merge_result(
+                                &mut all_results[gi][li],
+                                Classification::EXC,
+                                Some(allele_id),
+                                false,
+                                Some(hash),
+                            );
                         }
                     }
                 }
@@ -227,7 +735,7 @@ pub fn run_allele_call(
 
     for (idx, cds_item) in unmatched_cds.iter().enumerate() {
         let upper: Vec<u8> = cds_item.dna_seq.iter().map(|b| b.to_ascii_uppercase()).collect();
-        if let Some(protein) = translate::translate(&upper, config.translation_table) {
+        if let Some(protein) = translate::translate_cds(&upper, config.translation_table, true) {
             if protein.len() >= config.min_sequence_length as usize / 3 {
                 let dna_hash = schema::sha256(&upper);
                 translated.push((idx, protein, dna_hash));
@@ -235,6 +743,7 @@ pub fn run_allele_call(
         }
     }
     eprintln!("  Translated proteins: {}", translated.len());
+    let all_translated = translated.clone();
 
     // --- Phase 3c: Exact protein matching ---
     eprintln!("[Phase 3c] Exact protein matching...");
@@ -246,7 +755,7 @@ pub fn run_allele_call(
 
         if let Some(matches) = schema.protein_hashes.get(&prot_hash) {
             prot_exact_count += 1;
-            for &(locus_idx, _allele_id) in matches {
+            if let Some(&(locus_idx, _allele_id)) = matches.first() {
                 let li = locus_idx as usize;
                 if let Some(genomes) = hash_to_genomes.get(&dna_hash) {
                     // Sort genomes to process in order (first gets INF, rest get EXC)
@@ -257,48 +766,46 @@ pub fn run_allele_call(
                     for &&(genome_idx, _) in &sorted_genomes {
                         let gi = genome_idx as usize;
                         if gi < all_results.len() && li < num_loci {
-                            if all_results[gi][li].class == Classification::LNF {
-                                if let Some(aid) = inf_allele_id {
-                                    // Subsequent genomes: EXC with same allele
-                                    all_results[gi][li] = LocusResult {
-                                        class: Classification::EXC,
-                                        allele_id: Some(aid),
-                                        is_novel: true, matches: Vec::new(),
-                                    };
-                                    // Add to schema DNA hashes for future matches
-                                    schema.dna_hashes.entry(dna_hash)
-                                        .or_default()
-                                        .push((locus_idx, aid));
-                                } else {
-                                    // First genome: INF
-                                    let inf_id = next_allele_id[li];
-                                    next_allele_id[li] += 1;
-                                    inf_allele_id = Some(inf_id);
-                                    all_results[gi][li] = LocusResult {
-                                        class: Classification::INF,
-                                        allele_id: Some(inf_id),
-                                        is_novel: true, matches: Vec::new(),
-                                    };
-                                    let cds_item = unmatched_cds[idx];
-                                    novel_alleles.push((
-                                        format!("{}_{}", loci_list[li], cds_item.id),
-                                        cds_item.dna_seq.clone(),
-                                    ));
-                                    // CRC32 for hashed output
-                                    let seq_str = String::from_utf8_lossy(&cds_item.dna_seq);
-                                    schema.allele_crc32.insert((locus_idx, inf_id), crc32fast::hash(seq_str.as_bytes()));
-                                    // Add to schema DNA hashes
-                                    schema.dna_hashes.entry(dna_hash)
-                                        .or_default()
-                                        .push((locus_idx, inf_id));
-                                }
-                            } else if all_results[gi][li].class == Classification::EXC {
-                                all_results[gi][li].class = Classification::NIPHEM;
+                            let aid = if let Some(aid) = inf_allele_id {
+                                merge_result(
+                                    &mut all_results[gi][li],
+                                    Classification::EXC,
+                                    Some(aid),
+                                    true,
+                                    Some(dna_hash),
+                                );
+                                aid
+                            } else {
+                                let aid = register_novel_allele(
+                                    &mut schema,
+                                    &mut next_allele_id,
+                                    &mut novel_alleles,
+                                    &loci_list,
+                                    li,
+                                    unmatched_cds[idx],
+                                    dna_hash,
+                                );
+                                inf_allele_id = Some(aid);
+                                merge_result(
+                                    &mut all_results[gi][li],
+                                    Classification::INF,
+                                    Some(aid),
+                                    true,
+                                    Some(dna_hash),
+                                );
+                                aid
+                            };
+                            if !schema
+                                .dna_hashes
+                                .get(&dna_hash)
+                                .map(|ids| ids.contains(&(locus_idx, aid)))
+                                .unwrap_or(false)
+                            {
+                                schema.dna_hashes.entry(dna_hash).or_default().push((locus_idx, aid));
                             }
                         }
                     }
                 }
-                break;
             }
         } else {
             unmatched_proteins.push((idx, protein, dna_hash));
@@ -314,13 +821,39 @@ pub fn run_allele_call(
     let w = 5;
     let min_shared = 1;
 
-    let cluster_input: Vec<(usize, Vec<u8>)> = unmatched_proteins
+    let proteins_by_idx: FxHashMap<usize, Vec<u8>> = unmatched_proteins
         .iter()
         .map(|(idx, protein, _)| (*idx, protein.clone()))
         .collect();
+    let protein_hashes_by_idx: FxHashMap<usize, SeqHash> = unmatched_proteins
+        .iter()
+        .map(|(idx, protein, _)| (*idx, schema::sha256(protein)))
+        .collect();
+    let mut cds_indices_by_protein_hash: FxHashMap<SeqHash, Vec<usize>> = FxHashMap::default();
+    for (idx, _, _) in &unmatched_proteins {
+        if let Some(&protein_hash) = protein_hashes_by_idx.get(idx) {
+            cds_indices_by_protein_hash
+                .entry(protein_hash)
+                .or_default()
+                .push(*idx);
+        }
+    }
+    for cds_indices in cds_indices_by_protein_hash.values_mut() {
+        cds_indices.sort_unstable();
+        cds_indices.dedup();
+    }
+    let mut cluster_input: Vec<(usize, Vec<u8>)> = cds_indices_by_protein_hash
+        .values()
+        .filter_map(|cds_indices| {
+            let &cds_idx = cds_indices.first()?;
+            let protein = proteins_by_idx.get(&cds_idx)?.clone();
+            Some((cds_idx, protein))
+        })
+        .collect();
+    cluster_input.sort_unstable_by_key(|(cds_idx, _)| *cds_idx);
 
     // Wait for GPU init if applicable
-    let gpu_aligner = if let Some(handle) = gpu_handle {
+    let _gpu_aligner = if let Some(handle) = gpu_handle {
         match handle.join().expect("GPU init thread panicked") {
             Ok(a) => {
                 eprintln!("  GPU aligner initialized");
@@ -335,201 +868,359 @@ pub fn run_allele_call(
         None
     };
 
-    let index = cluster::build_minimizer_index(&schema.representatives, k, w);
-    let (pair_protein_idx, pair_rep_idx) = cluster::build_alignment_pairs(
-        &cluster_input, &index, k, w, min_shared,
-    );
-    eprintln!("  {} alignment pairs from {} proteins", pair_protein_idx.len(), cluster_input.len());
+    let compat_mode = config.align_mode == crate::types::AlignMode::Compatible;
+    let index = if compat_mode {
+        cluster::build_minimizer_index_compat(&schema.representatives, k, w)
+    } else {
+        cluster::build_minimizer_index(&schema.representatives, k, w)
+    };
+    let phase4_similarity = 0.20;
+    let phase4_threshold = config.bsr_threshold + 0.1;
 
-    let cluster_results = if let Some(ref aligner) = gpu_aligner {
-        cluster::align_pairs_gpu(
+    // Build self_scores map for BLAST functions
+    let blast_self_scores: FxHashMap<usize, f64> = schema.representatives.iter()
+        .enumerate()
+        .map(|(i, rep)| (i, rep.self_score))
+        .collect();
+
+    let cluster_results = if config.align_mode == crate::types::AlignMode::Compatible {
+        eprintln!("  Using BLAST (compatible mode)");
+        let raw_results = blast::blast_phase4_raw(
             &cluster_input,
             &schema.representatives,
-            &pair_protein_idx,
-            &pair_rep_idx,
-            aligner,
-        )
+            &blast_self_scores,
+            phase4_threshold,
+            &config.blastp_path,
+            config.cpu_cores,
+        );
+        // Post-filter: replicate chewBBACA's behavior.
+        // Python flow:
+        //   1. Per-cluster BLAST (only CDS that cluster with a rep are BLASTed against it)
+        //   2. Concatenate per-cluster results per locus
+        //   3. select_highest_scores: sort by slen DESC, keep first per (locus, target)
+        //   4. process_blast_results: BSR filter
+        //
+        // Rust equivalent with all-vs-all BLAST:
+        //   1. Cluster filter (replaces per-cluster BLAST restriction)
+        //   2. Per-locus dedup (replaces select_highest_scores)
+        //   3. BSR filter (replaces process_blast_results)
+        let proteins_map: FxHashMap<usize, &[u8]> = cluster_input.iter()
+            .map(|(idx, prot)| (*idx, prot.as_slice()))
+            .collect();
+        let raw_count = raw_results.len();
+        // Step 1: Cluster filter — only keep hits where CDS clusters with the representative.
+        let seq_num_cluster = 30;
+        let mut cluster_cache: FxHashMap<usize, Vec<usize>> = FxHashMap::default();
+        let cluster_filtered: Vec<_> = raw_results.into_iter().filter(|hit| {
+            let Some(protein) = proteins_map.get(&hit.cds_idx) else { return false };
+            let clusters = cluster_cache.entry(hit.cds_idx).or_insert_with(|| {
+                cluster::find_clusters_similarity_compat(
+                    protein, &index, k, w, phase4_similarity, seq_num_cluster,
+                )
+            });
+            clusters.contains(&hit.representative_idx)
+        }).collect();
+        let cluster_filtered_count = cluster_filtered.len();
+        // Step 2: Sort by slen DESC, then rep seq_id lexicographic ASC.
+        // Python's select_highest_scores sorts by slen (x[5]) DESC. When slen ties,
+        // Python's stable sort preserves concatenation order. We approximate with
+        // rep_id lexicographic ASC, which works for most cases.
+        let mut sorted_hits = cluster_filtered;
+        sorted_hits.sort_by(|a, b| {
+            b.query_len.cmp(&a.query_len)  // slen DESC
+                .then_with(|| {
+                    let a_id = &schema.representatives[a.representative_idx].seq_id;
+                    let b_id = &schema.representatives[b.representative_idx].seq_id;
+                    a_id.cmp(b_id)  // rep allele name lexicographic ASC
+                })
+        });
+        // Step 3: Per-locus dedup — keep first hit per (locus, cds_idx)
+        let mut seen_per_locus: FxHashMap<u32, FxHashSet<usize>> = FxHashMap::default();
+        let deduped: Vec<_> = sorted_hits.into_iter().filter(|hit| {
+            seen_per_locus.entry(hit.best_locus).or_default().insert(hit.cds_idx)
+        }).collect();
+        let deduped_count = deduped.len();
+        // Step 4: BSR filter
+        let filtered: Vec<_> = deduped.into_iter()
+            .filter(|hit| hit.best_bsr >= phase4_threshold)
+            .collect();
+        // Diagnostic
+        let clustered_count = cluster_cache.values().filter(|v| !v.is_empty()).count();
+        let unclustered_count = cluster_cache.values().filter(|v| v.is_empty()).count();
+        eprintln!("  Clustering: {}/{} CDS clustered ({} unclustered)",
+            clustered_count, cluster_cache.len(), unclustered_count);
+        eprintln!("  BLAST raw hits: {}, after cluster: {}, after dedup: {}, after BSR: {}",
+            raw_count, cluster_filtered_count, deduped_count, filtered.len());
+        filtered
     } else {
-        cluster::cluster_and_align(
+        cluster::cluster_and_align_multi_similarity(
             &cluster_input,
             &schema.representatives,
             &index,
-            k, w, min_shared,
+            k,
+            w,
+            phase4_similarity,
+            30,
         )
     };
 
-    eprintln!("  Cluster alignment results: {}", cluster_results.len());
+    eprintln!("  Phase 4 candidate hits: {}", cluster_results.len());
 
-    // Process cluster results
-    let mut still_unmatched: Vec<(usize, Vec<u8>)> = Vec::new();
-    let mut matched_in_cluster: FxHashMap<usize, bool> = FxHashMap::default();
-
-    for result in &cluster_results {
-        if result.best_bsr >= config.bsr_threshold {
-            matched_in_cluster.insert(result.cds_idx, true);
-
-            let cds_item = unmatched_cds[result.cds_idx];
-            let li = result.best_locus as usize;
-            let dna_upper: Vec<u8> = cds_item.dna_seq.iter().map(|b| b.to_ascii_uppercase()).collect();
-            let dna_hash = schema::sha256(&dna_upper);
-
-            // Classify this inexact match using target (representative) alignment positions
-            let class = classify::classify_inexact(
-                result.best_bsr,
-                config.bsr_threshold,
-                cds_item.dna_seq.len() as u32,
-                schema.loci[li].mode_length,
-                config.size_threshold,
-                cds_item.coord.as_ref(),
-                schema.representatives[li].dna_length,
-                result.target_start,
-                result.target_end,
-                result.target_len,
+    let phase4_hits_by_locus = group_hits_by_locus(cluster_results);
+    let mut phase4_loci: Vec<_> = phase4_hits_by_locus.keys().copied().collect();
+    phase4_loci.sort_unstable();
+    let mut phase4_excluded: FxHashSet<usize> = FxHashSet::default();
+    for locus_idx in phase4_loci {
+        if let Some(hits) = phase4_hits_by_locus.get(&locus_idx) {
+            let (excluded, _) = process_locus_hits(
+                locus_idx,
+                hits,
+                phase4_threshold,
+                None,
+                false,
+                &unmatched_cds,
+                &protein_hashes_by_idx,
+                &cds_indices_by_protein_hash,
+                &hash_to_genomes,
+                &mut all_results,
+                &mut next_allele_id,
+                &mut novel_alleles,
+                &mut schema,
+                &loci_list,
+                config,
             );
-
-            // Apply to all genomes with this CDS (first gets INF, rest EXC)
-            if let Some(genomes) = hash_to_genomes.get(&dna_hash) {
-                let mut sorted_genomes: Vec<_> = genomes.iter().collect();
-                sorted_genomes.sort_by_key(|(gi, _)| *gi);
-
-                let mut inf_allele_id: Option<AlleleId> = None;
-                for &&(genome_idx, _) in &sorted_genomes {
-                    let gi = genome_idx as usize;
-                    if gi < all_results.len() && li < num_loci {
-                        if all_results[gi][li].class == Classification::LNF {
-                            if class == Classification::INF {
-                                if let Some(aid) = inf_allele_id {
-                                    // Subsequent genomes: EXC with same allele
-                                    all_results[gi][li] = LocusResult {
-                                        class: Classification::EXC,
-                                        allele_id: Some(aid),
-                                        is_novel: true, matches: Vec::new(),
-                                    };
-                                } else {
-                                    // First genome: INF
-                                    let inf_id = next_allele_id[li];
-                                    next_allele_id[li] += 1;
-                                    inf_allele_id = Some(inf_id);
-                                    all_results[gi][li] = LocusResult {
-                                        class: Classification::INF,
-                                        allele_id: Some(inf_id),
-                                        is_novel: true, matches: Vec::new(),
-                                    };
-                                    novel_alleles.push((
-                                        format!("{}_{}", loci_list[li], cds_item.id),
-                                        cds_item.dna_seq.clone(),
-                                    ));
-                                    // CRC32 for hashed output
-                                    let seq_str = String::from_utf8_lossy(&cds_item.dna_seq);
-                                    schema.allele_crc32.insert((result.best_locus, inf_id), crc32fast::hash(seq_str.as_bytes()));
-                                    // Add to schema for future matches
-                                    schema.dna_hashes.entry(dna_hash)
-                                        .or_default()
-                                        .push((result.best_locus, inf_id));
-                                }
-                            } else {
-                                all_results[gi][li] = LocusResult {
-                                    class,
-                                    allele_id: None,
-                                    is_novel: false, matches: Vec::new(),
-                                };
-                            }
-                        } else if all_results[gi][li].class == Classification::EXC && class.is_valid() {
-                            all_results[gi][li].class = Classification::NIPHEM;
-                        } else if all_results[gi][li].class.is_valid() && class.is_valid() {
-                            all_results[gi][li].class = Classification::NIPH;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // Collect still-unmatched for repdet
-    for (idx, protein, _) in &unmatched_proteins {
-        if !matched_in_cluster.contains_key(idx) {
-            still_unmatched.push((*idx, protein.clone()));
+            phase4_excluded.extend(excluded);
         }
     }
 
     // --- Phase 5: Representative determination ---
-    let t5 = std::time::Instant::now(); eprintln!("  [TIMING] Phase 4: {:.1}s", t5.duration_since(t4).as_secs_f64()); eprintln!("[Phase 5] Representative determination ({} unmatched)...", still_unmatched.len());
-    let mut reps = schema.representatives.clone();
-    let repdet_results = repdet::iterative_repdet(
-        &still_unmatched,
-        &mut reps,
-        config,
-        k, w, min_shared,
-        gpu_aligner.as_ref(),
-        &cluster_results,
+    let t5 = std::time::Instant::now();
+    eprintln!(
+        "  [TIMING] Phase 4: {:.1}s",
+        t5.duration_since(t4).as_secs_f64()
+    );
+    let mut still_unmatched: Vec<(usize, Vec<u8>)> = cluster_input
+        .iter()
+        .filter(|(idx, _)| !phase4_excluded.contains(idx))
+        .cloned()
+        .collect();
+    eprintln!(
+        "[Phase 5] Representative determination ({} unmatched)...",
+        still_unmatched.len()
     );
 
-    eprintln!("  RepDet matches: {}", repdet_results.len());
+    let mut repdet_match_count = 0usize;
+    let mut current_reps = schema.representatives.clone();
+    let max_repdet_iterations = 10;
+    let repdet_threshold = config.bsr_threshold;
+    let repdet_candidate_upper = repdet_threshold + 0.1;
 
-    for result in &repdet_results {
-        let cds_item = unmatched_cds[result.cds_idx];
-        let li = result.best_locus as usize;
-        let dna_upper: Vec<u8> = cds_item.dna_seq.iter().map(|b| b.to_ascii_uppercase()).collect();
-        let dna_hash = schema::sha256(&dna_upper);
+    for iteration in 1..=max_repdet_iterations {
+        if still_unmatched.is_empty() || current_reps.is_empty() {
+            break;
+        }
 
-        let class = classify::classify_inexact(
-            result.best_bsr,
-            config.bsr_threshold,
-            cds_item.dna_seq.len() as u32,
-            schema.loci[li].mode_length,
-            config.size_threshold,
-            cds_item.coord.as_ref(),
-            schema.representatives[li].dna_length,
-            result.target_start,
-            result.target_end,
-            result.target_len,
+        let repdet_hits = if config.align_mode == crate::types::AlignMode::Compatible {
+            // Compatible mode: use BLAST for repdet
+            let repdet_self_scores: FxHashMap<usize, f64> = current_reps.iter()
+                .enumerate()
+                .map(|(i, rep)| (i, rep.self_score))
+                .collect();
+            blast::blast_repdet(
+                &still_unmatched,
+                &current_reps,
+                &repdet_self_scores,
+                repdet_threshold,
+                &config.blastp_path,
+                config.cpu_cores,
+            )
+        } else {
+            let rep_index = cluster::build_minimizer_index(&current_reps, k, w);
+            cluster::cluster_and_align_multi_limited_bsr(
+                &still_unmatched,
+                &current_reps,
+                &rep_index,
+                k,
+                w,
+                min_shared,
+                5,
+                repdet_threshold,
+            )
+        };
+        if repdet_hits.is_empty() {
+            break;
+        }
+        repdet_match_count += repdet_hits.len();
+
+        let hits_by_locus = group_hits_by_locus(repdet_hits);
+        let mut loci: Vec<_> = hits_by_locus.keys().copied().collect();
+        loci.sort_unstable();
+
+        let mut newly_excluded: FxHashSet<usize> = FxHashSet::default();
+        let mut candidate_cds_by_locus: FxHashMap<usize, Vec<usize>> = FxHashMap::default();
+
+        for locus_idx in loci {
+            if let Some(hits) = hits_by_locus.get(&locus_idx) {
+                let validated_hits = if config.align_mode == crate::types::AlignMode::Compatible {
+                    // Compatible mode: BLAST scores are already correct, no borderline validation needed
+                    let mut all_hits: Vec<cluster::ClusterResult> = hits
+                        .iter()
+                        .filter(|hit| hit.best_bsr >= repdet_threshold)
+                        .cloned()
+                        .collect();
+                    all_hits.sort_unstable_by(|a, b| {
+                        b.score.cmp(&a.score).then(a.cds_idx.cmp(&b.cds_idx))
+                    });
+                    all_hits
+                } else {
+                    // Fast mode: split into validated/borderline, re-check borderline with BLAST
+                    let mut validated_hits: Vec<cluster::ClusterResult> = hits
+                        .iter()
+                        .filter(|hit| hit.best_bsr >= repdet_candidate_upper)
+                        .cloned()
+                        .collect();
+                    let borderline_hits: Vec<cluster::ClusterResult> = hits
+                        .iter()
+                        .filter(|hit| hit.best_bsr >= repdet_threshold && hit.best_bsr < repdet_candidate_upper)
+                        .cloned()
+                        .collect();
+                    if !borderline_hits.is_empty() {
+                        let newly_validated = blast::validate_locus_hits(
+                            &borderline_hits,
+                            &proteins_by_idx,
+                            &current_reps,
+                            repdet_threshold,
+                        );
+                        if std::env::var("CHEWCALL_DEBUG_LOCI")
+                            .ok()
+                            .map(|value| value.split(',').any(|entry| entry.trim() == loci_list[locus_idx]))
+                            .unwrap_or(false)
+                        {
+                            for hit in &newly_validated {
+                                eprintln!(
+                                    "DEBUG validated locus={} cds_idx={} rep={} rep_id={} bsr={:.4} score={}",
+                                    loci_list[locus_idx],
+                                    hit.cds_idx,
+                                    hit.representative_idx,
+                                    current_reps[hit.representative_idx].seq_id,
+                                    hit.best_bsr,
+                                    hit.score,
+                                );
+                            }
+                        }
+                        validated_hits.extend(newly_validated);
+                        validated_hits.sort_unstable_by(|a, b| {
+                            b.score.cmp(&a.score).then(a.cds_idx.cmp(&b.cds_idx))
+                        });
+                    }
+                    validated_hits
+                };
+                let (excluded, candidates) = process_locus_hits(
+                    locus_idx,
+                    &validated_hits,
+                    repdet_threshold,
+                    Some(repdet_candidate_upper),
+                    false,
+                    &unmatched_cds,
+                    &protein_hashes_by_idx,
+                    &cds_indices_by_protein_hash,
+                    &hash_to_genomes,
+                    &mut all_results,
+                    &mut next_allele_id,
+                    &mut novel_alleles,
+                    &mut schema,
+                    &loci_list,
+                    config,
+                );
+                newly_excluded.extend(excluded);
+                if !candidates.is_empty() {
+                    candidate_cds_by_locus.insert(locus_idx, candidates);
+                }
+            }
+        }
+
+        still_unmatched.retain(|(cds_idx, _)| !newly_excluded.contains(cds_idx));
+
+        let selected_reps = select_new_representatives(
+            &candidate_cds_by_locus,
+            &unmatched_cds,
+            &proteins_by_idx,
+            repdet_threshold,
+        );
+        eprintln!(
+            "  RepDet iter {}: hits={}, classified={}, selected={}",
+            iteration,
+            repdet_match_count,
+            newly_excluded.len(),
+            selected_reps.len(),
         );
 
-        if let Some(genomes) = hash_to_genomes.get(&dna_hash) {
-            let mut sorted_genomes: Vec<_> = genomes.iter().collect();
-            sorted_genomes.sort_by_key(|(gi, _)| *gi);
+        if selected_reps.is_empty() {
+            break;
+        }
+        current_reps = selected_reps;
+    }
 
-            let mut inf_allele_id: Option<AlleleId> = None;
-            for &&(genome_idx, _) in &sorted_genomes {
-                let gi = genome_idx as usize;
-                if gi < all_results.len() && li < num_loci {
-                    if all_results[gi][li].class == Classification::LNF {
-                        if class == Classification::INF {
-                            if let Some(aid) = inf_allele_id {
-                                all_results[gi][li] = LocusResult {
-                                    class: Classification::EXC,
-                                    allele_id: Some(aid),
-                                    is_novel: true, matches: Vec::new(),
-                                };
-                            } else {
-                                let inf_id = next_allele_id[li];
-                                next_allele_id[li] += 1;
-                                inf_allele_id = Some(inf_id);
-                                all_results[gi][li] = LocusResult {
-                                    class: Classification::INF,
-                                    allele_id: Some(inf_id),
-                                    is_novel: true, matches: Vec::new(),
-                                };
-                                novel_alleles.push((
-                                    format!("{}_{}", loci_list[li], cds_item.id),
-                                    cds_item.dna_seq.clone(),
-                                ));
-                                // CRC32 for hashed output
-                                let seq_str = String::from_utf8_lossy(&cds_item.dna_seq);
-                                schema.allele_crc32.insert((li as u32, inf_id), crc32fast::hash(seq_str.as_bytes()));
-                            }
-                        } else {
-                            all_results[gi][li] = LocusResult {
-                                class,
-                                allele_id: None,
-                                is_novel: false, matches: Vec::new(),
-                            };
-                        }
-                    }
+    eprintln!("  RepDet matches: {}", repdet_match_count);
+
+    // Rescue phase: re-BLAST unassigned CDS against all representatives.
+    // Python chewBBACA does NOT have this rescue phase, so skip in compatible mode.
+    if config.align_mode != crate::types::AlignMode::Compatible {
+        let assigned_hashes: FxHashSet<SeqHash> = all_results
+            .iter()
+            .flat_map(|genome_results| genome_results.iter())
+            .filter_map(|result| {
+                if result.class.is_valid() {
+                    result.dna_hash
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        let rescue_input: Vec<(usize, Vec<u8>)> = all_translated
+            .iter()
+            .filter(|(_, _, dna_hash)| !assigned_hashes.contains(dna_hash))
+            .map(|(idx, protein, _)| (*idx, protein.clone()))
+            .collect();
+        if !rescue_input.is_empty() {
+            let rescue_hits = cluster::cluster_and_align_multi_similarity(
+                &rescue_input,
+                &schema.representatives,
+                &index,
+                k,
+                w,
+                phase4_similarity,
+                30,
+            );
+            let rescue_hits_by_locus = group_hits_by_locus(rescue_hits);
+            let mut rescue_loci: Vec<_> = rescue_hits_by_locus.keys().copied().collect();
+            rescue_loci.sort_unstable();
+            for locus_idx in rescue_loci {
+                if let Some(hits) = rescue_hits_by_locus.get(&locus_idx) {
+                    let _ = process_locus_hits(
+                        locus_idx,
+                        hits,
+                        phase4_threshold,
+                        None,
+                        true,
+                        &unmatched_cds,
+                        &protein_hashes_by_idx,
+                        &cds_indices_by_protein_hash,
+                        &hash_to_genomes,
+                        &mut all_results,
+                        &mut next_allele_id,
+                        &mut novel_alleles,
+                        &mut schema,
+                        &loci_list,
+                        config,
+                    );
                 }
             }
         }
     }
+
+    mark_paralogous_matches(&mut all_results);
 
     // --- Phase 6: Build contigs info ---
     let t6 = std::time::Instant::now(); eprintln!("  [TIMING] Phase 5: {:.1}s", t6.duration_since(t5).as_secs_f64()); eprintln!("[Phase 6] Building contigs info...");
@@ -569,6 +1260,7 @@ pub fn run_allele_call(
         &genome_names,
         &loci_list,
         &all_results,
+        &schema.inferred_allele_ids,
     )?;
 
     output::write_alleles_hashed_tsv(
@@ -671,23 +1363,121 @@ fn find_training_file(schema_dir: &Path) -> Option<std::path::PathBuf> {
     None
 }
 
-fn load_self_scores_cache(path: &Path, expected_count: usize) -> Option<Vec<f64>> {
+fn load_self_scores_cache(path: &Path, reps: &[Representative]) -> Option<Vec<f64>> {
+    use std::collections::HashMap;
+
     let content = std::fs::read_to_string(path).ok()?;
-    let scores: Vec<f64> = content.lines()
-        .filter_map(|line| {
-            let parts: Vec<&str> = line.split('\t').collect();
-            if parts.len() >= 2 { parts[1].parse().ok() } else { None }
-        })
-        .collect();
-    if scores.len() == expected_count { Some(scores) } else { None }
+    let mut by_id: HashMap<&str, f64> = HashMap::new();
+    for line in content.lines() {
+        let mut parts = line.splitn(2, '\t');
+        let id = parts.next()?;
+        let score = parts.next()?.parse().ok()?;
+        by_id.insert(id, score);
+    }
+
+    let mut scores = Vec::with_capacity(reps.len());
+    for rep in reps {
+        scores.push(*by_id.get(rep.seq_id.as_str())?);
+    }
+    Some(scores)
 }
 
-fn save_self_scores_cache(path: &Path, reps: &[Representative], loci_names: &[String]) {
+/// Load self-scores from Python chewBBACA pickle (short/self_scores).
+/// Format: dict { rep_id (str) → (prot_len (int), blast_raw_score (float)) }
+fn load_python_self_scores_pickle(path: &Path, reps: &[Representative]) -> Option<Vec<f64>> {
+    use std::collections::HashMap;
+
+    let data = std::fs::read(path).ok()?;
+    // Quick heuristic parse: scan for rep_id strings and extract the float score that follows.
+    // Python pickle stores string keys and tuple values.
+    // We look for each rep's seq_id in the binary data and extract the associated score.
+    //
+    // More robust approach: find key strings and scan forward for the float64 value.
+    // Pickle3: X + 4-byte len + string for keys, G + 8-byte double for floats, K/J/M for ints.
+
+    let mut by_id: HashMap<String, f64> = HashMap::new();
+
+    // Scan for each rep_id.
+    // Must find an exact match (not a substring of a longer key).
+    // In pickle protocol 4, string keys are preceded by a length prefix and followed
+    // by a MEMOIZE (0x94) opcode. Check that the byte after the key is NOT alphanumeric
+    // to avoid matching "key_1" inside "key_110".
+    for rep in reps {
+        let key_bytes = rep.seq_id.as_bytes();
+        let mut search_from = 0;
+        let found_pos = loop {
+            if let Some(rel_pos) = data[search_from..].windows(key_bytes.len()).position(|w| w == key_bytes) {
+                let pos = search_from + rel_pos;
+                let after = pos + key_bytes.len();
+                // Accept if at end of data or next byte is not alphanumeric/underscore
+                if after >= data.len() || !matches!(data[after], b'0'..=b'9' | b'a'..=b'z' | b'A'..=b'Z' | b'_') {
+                    break Some(pos);
+                }
+                // This was a substring match (e.g., "_1" matched inside "_110"); skip it
+                search_from = pos + 1;
+            } else {
+                break None;
+            }
+        };
+        if let Some(pos) = found_pos {
+            // After the key string in pickle, the format is:
+            //   \x94 (MEMOIZE)
+            //   M + 2 bytes (BININT2 for prot_len) OR K + 1 byte (BINUINT1) OR J + 4 bytes (BININT)
+            //   G + 8 bytes (BINFLOAT for self_score)
+            //   \x86 (TUPLE2)
+            //
+            // We must properly skip the integer opcode to find the real BINFLOAT (G),
+            // because 'G' (0x47) can appear inside integer data bytes.
+            let search_start = pos + key_bytes.len();
+            let search_end = (search_start + 30).min(data.len());
+            let window = &data[search_start..search_end];
+
+            let mut i = 0;
+            while i < window.len() {
+                match window[i] {
+                    0x94 => { i += 1; } // MEMOIZE: skip
+                    b'K' => { i += 2; } // BINUINT1: skip opcode + 1 byte
+                    b'M' => { i += 3; } // BININT2: skip opcode + 2 bytes
+                    b'J' => { i += 5; } // BININT: skip opcode + 4 bytes
+                    b'G' if i + 9 <= window.len() => {
+                        // BINFLOAT: 8-byte big-endian double
+                        let bytes: [u8; 8] = window[i+1..i+9].try_into().ok()?;
+                        let val = f64::from_be_bytes(bytes);
+                        if val > 0.0 && val < 1e10 {
+                            by_id.insert(rep.seq_id.clone(), val);
+                        }
+                        break;
+                    }
+                    0x86 => { break; } // TUPLE2: end of tuple, stop
+                    _ => { i += 1; } // Unknown opcode, skip
+                }
+            }
+        }
+    }
+
+    if by_id.len() < reps.len() / 2 {
+        // Too few matches, pickle format might be wrong
+        return None;
+    }
+
+    let mut scores = Vec::with_capacity(reps.len());
+    for rep in reps {
+        if let Some(&score) = by_id.get(&rep.seq_id) {
+            scores.push(score);
+        } else {
+            // Fallback to parasail for missing entries
+            scores.push(crate::sw::self_score(&rep.protein_seq) as f64);
+        }
+    }
+    Some(scores)
+}
+
+fn save_self_scores_cache(path: &Path, reps: &[Representative]) {
     use std::io::Write;
     if let Ok(file) = std::fs::File::create(path) {
         let mut w = std::io::BufWriter::new(file);
-        for (i, rep) in reps.iter().enumerate() {
-            let _ = writeln!(w, "{}\t{}", loci_names[i], rep.self_score);
+        for rep in reps {
+            let _ = writeln!(w, "{}\t{}", rep.seq_id, rep.self_score);
         }
     }
 }

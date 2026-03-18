@@ -17,17 +17,21 @@ pub fn classify_inexact(
     target_start: u32,  // 1-based protein position on representative
     target_end: u32,    // 1-based protein position on representative
     target_len: u32,    // representative protein length
+    cds_input: bool,    // true when --cds-input used: skip position classification
 ) -> Classification {
     if bsr < bsr_threshold {
         return Classification::LNF;
     }
 
     // 1. Position classification (only for genome assemblies with coordinates)
-    if let Some(coord) = coord {
-        if let Some(pos_class) = position_classification(
-            coord, rep_dna_len, target_start, target_end, target_len,
-        ) {
-            return pos_class;
+    // When cds_input is true, chewBBACA skips PLOT3/PLOT5/LOTSC checks entirely.
+    if !cds_input {
+        if let Some(coord) = coord {
+            if let Some(pos_class) = position_classification(
+                coord, rep_dna_len, target_start, target_end, target_len,
+            ) {
+                return pos_class;
+            }
         }
     }
 
@@ -118,12 +122,14 @@ fn size_classification(
         return None;
     }
 
-    let min_len = (mode_len as f64 * (1.0 - size_threshold)) as u32;
-    let max_len = (mode_len as f64 * (1.0 + size_threshold)) as u32;
+    let mode_len_f = mode_len as f64;
+    let min_len = mode_len_f * (1.0 - size_threshold);
+    let max_len = mode_len_f * (1.0 + size_threshold);
+    let target_len = cds_dna_len as f64;
 
-    if cds_dna_len < min_len {
+    if target_len < min_len {
         Some(Classification::ASM)
-    } else if cds_dna_len > max_len {
+    } else if target_len > max_len {
         Some(Classification::ALM)
     } else {
         None
@@ -185,4 +191,74 @@ pub fn resolve_multi_match(classes: &[Classification]) -> Classification {
             Classification::NIPH
         }
     }
+}
+
+/// Record one match for a genome+locus pair and recompute the final class.
+pub fn record_match(result: &mut LocusResult, match_result: MatchResult) {
+    result.matches.push(match_result);
+
+    let classes: Vec<_> = result.matches.iter().map(|m| m.class).collect();
+    result.class = resolve_multi_match(&classes);
+
+    if matches!(result.class, Classification::EXC | Classification::INF) {
+        if let Some(primary) = result.matches.iter().find(|m| m.class == result.class) {
+            result.allele_id = primary.allele_id;
+            result.is_novel = result.class == Classification::INF;
+            return;
+        }
+    }
+
+    result.allele_id = None;
+    result.is_novel = false;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{record_match, resolve_multi_match};
+    use crate::types::Classification;
+    use crate::types::{LocusResult, MatchResult};
+
+    #[test]
+    fn resolve_exact_plus_inferred_is_niph() {
+        assert_eq!(
+            resolve_multi_match(&[Classification::EXC, Classification::INF]),
+            Classification::NIPH,
+        );
+    }
+
+    #[test]
+    fn record_match_recomputes_final_class() {
+        let mut result = LocusResult {
+            class: Classification::LNF,
+            allele_id: None,
+            is_novel: false,
+            dna_hash: None,
+            matches: Vec::new(),
+        };
+
+        record_match(&mut result, MatchResult {
+            locus_idx: 0,
+            allele_id: Some(10),
+            class: Classification::EXC,
+            bsr: 1.0,
+            cds_hash: [0; 32],
+            protein_hash: None,
+            representative_id: None,
+        });
+        assert_eq!(result.class, Classification::EXC);
+        assert_eq!(result.allele_id, Some(10));
+
+        record_match(&mut result, MatchResult {
+            locus_idx: 0,
+            allele_id: Some(11),
+            class: Classification::INF,
+            bsr: 0.9,
+            cds_hash: [1; 32],
+            protein_hash: None,
+            representative_id: None,
+        });
+        assert_eq!(result.class, Classification::NIPH);
+        assert_eq!(result.allele_id, None);
+    }
+
 }

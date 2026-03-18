@@ -82,7 +82,7 @@ DATASETS = {
 
 # Path to chewbbacca-rs binary (relative to this script)
 RUST_BINARY = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                           "target", "release", "chewbbacca-rs")
+                           "target", "release", "chewcall")
 
 # Path to predict_cds.py (pre-computes CDS to avoid pyrodigal dependency in Rust)
 PREDICT_CDS_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -249,7 +249,7 @@ def precompute_cds(genomes_dir, schema_dir, cds_output_dir, n_samples, cpu_cores
 # ── Run implementations ─────────────────────────────────────────────────────
 
 def run_python_chewbbaca(output_dir, schema_dir, genomes_dir, n_samples,
-                         cpu_cores):
+                         cpu_cores, cds_dir=None):
     """Run original Python chewBBACA (BLAST backend) via subprocess.
 
     Requires a Python environment with chewBBACA and BLAST installed.
@@ -265,14 +265,24 @@ def run_python_chewbbaca(output_dir, schema_dir, genomes_dir, n_samples,
         print(f"    Set CHEWBBACA_PYTHON env var to your chewBBACA Python interpreter.")
         return False
 
-    # Build genome list
-    all_fastas = sorted([
-        f for f in os.listdir(genomes_dir)
-        if f.endswith(('.fasta', '.fa', '.fna'))
-    ])
-    if n_samples:
-        all_fastas = all_fastas[:n_samples]
-    genome_files = [os.path.join(genomes_dir, f) for f in all_fastas]
+    # Build genome list — use CDS files if available (for CDS input mode)
+    use_cds_input = cds_dir is not None and os.path.isdir(cds_dir)
+    if use_cds_input:
+        all_fastas = sorted([
+            f for f in os.listdir(cds_dir)
+            if f.endswith('.cds.fasta')
+        ])
+        if n_samples:
+            all_fastas = all_fastas[:n_samples]
+        genome_files = [os.path.join(cds_dir, f) for f in all_fastas]
+    else:
+        all_fastas = sorted([
+            f for f in os.listdir(genomes_dir)
+            if f.endswith(('.fasta', '.fa', '.fna'))
+        ])
+        if n_samples:
+            all_fastas = all_fastas[:n_samples]
+        genome_files = [os.path.join(genomes_dir, f) for f in all_fastas]
 
     # Write a runner script that imports chewBBACA and runs AlleleCall
     runner_script = os.path.join(output_dir, '_run_chewbbaca.py')
@@ -326,7 +336,7 @@ config = {{
     'Prodigal training file': None,
     'CPU cores': cpu_cores,
     'BLAST path': '',
-    'CDS input': False,
+    'CDS input': {use_cds_input},
     'Prodigal mode': 'single',
     'Mode': 4,
 }}
@@ -358,7 +368,8 @@ shutil.rmtree(py_schema, ignore_errors=True)
 
 
 def run_rust_chewbbacca(output_dir, schema_dir, genomes_dir, cds_dir,
-                        n_samples, cpu_cores, use_gpu=False):
+                        n_samples, cpu_cores, use_gpu=False,
+                        mode="fast", blastp_path=None):
     """Run chewbbacca-rs."""
     if not os.path.exists(RUST_BINARY):
         print(f"    ERROR: Rust binary not found at {RUST_BINARY}")
@@ -393,6 +404,10 @@ def run_rust_chewbbacca(output_dir, schema_dir, genomes_dir, cds_dir,
         cmd += ["--cds-input", cds_dir]
     if use_gpu:
         cmd += ["--gpu"]
+    if mode != "fast":
+        cmd += ["--mode", mode]
+    if blastp_path:
+        cmd += ["--blastp-path", blastp_path]
 
     env = os.environ.copy()
     parasail_dir = os.path.expanduser("~/parasail/build")
@@ -490,7 +505,7 @@ def run_organism_benchmark(key, dataset, args):
         'total_cells': 0, 'matching_cells': 0, 'match_detail': 'N/A',
     }
 
-    # Pre-compute CDS for Rust
+    # Pre-compute CDS (shared by both Rust and Python when available)
     cds_dir = None
     if not args.python_only:
         print(f"\n  [3/5] Pre-computing CDS (pyrodigal)...")
@@ -516,7 +531,8 @@ def run_organism_benchmark(key, dataset, args):
         os.makedirs(python_dir, exist_ok=True)
         t0 = time.time()
         ok = run_python_chewbbaca(python_dir, schema_dir, genomes_dir,
-                                   args.n_samples, args.cpu_cores)
+                                   args.n_samples, args.cpu_cores,
+                                   cds_dir=cds_dir)
         if ok:
             result['python_time'] = time.time() - t0
             print(f"    Python time: {result['python_time']:.1f}s")
@@ -533,7 +549,8 @@ def run_organism_benchmark(key, dataset, args):
         os.makedirs(rust_dir, exist_ok=True)
         t0 = time.time()
         ok = run_rust_chewbbacca(rust_dir, schema_dir, genomes_dir,
-                                  cds_dir, args.n_samples, args.cpu_cores)
+                                  cds_dir, args.n_samples, args.cpu_cores,
+                                  mode=args.mode, blastp_path=args.blastp_path)
         if ok:
             result['rust_time'] = time.time() - t0
             print(f"    Rust time: {result['rust_time']:.1f}s")
@@ -596,6 +613,10 @@ def main():
                         help="Run only Python (skip Rust)")
     parser.add_argument("--gpu", action="store_true",
                         help="Also run Rust with --gpu flag")
+    parser.add_argument("--mode", default="fast",
+                        help="Alignment mode: 'fast' or 'compatible' (default: fast)")
+    parser.add_argument("--blastp-path", default=None,
+                        help="Path to blastp binary (required for --mode compatible)")
     args = parser.parse_args()
 
     args.data_dir = os.path.abspath(args.data_dir)

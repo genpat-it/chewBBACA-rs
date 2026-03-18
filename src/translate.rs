@@ -3,9 +3,38 @@
 /// Translate a DNA sequence to protein using the specified genetic code.
 /// Returns None if the sequence length is not a multiple of 3,
 /// contains ambiguous bases, or has internal stop codons.
+///
+/// When `cds` is true, behaves like BioPython's `Seq.translate(cds=True)`:
+/// - Validates the first codon is a valid start codon for the table
+/// - Translates the first codon to M (methionine) regardless of standard encoding
+/// This matches bacterial convention where alternative start codons (TTG, GTG, etc.)
+/// all encode fMet (formyl-methionine) at initiation.
 pub fn translate(dna: &[u8], table: u8) -> Option<Vec<u8>> {
+    translate_cds(dna, table, false)
+}
+
+/// Translate with CDS mode (alternative start codons → M).
+/// In CDS mode (matching BioPython's `Seq.translate(cds=True)`):
+/// - First codon must be a valid start codon → translated to M
+/// - Last codon must be a stop codon
+/// - No internal stop codons allowed
+pub fn translate_cds(dna: &[u8], table: u8, cds: bool) -> Option<Vec<u8>> {
     if dna.len() < 3 || dna.len() % 3 != 0 {
         return None;
+    }
+
+    if cds {
+        // Check first codon is a valid start
+        let first_codon = &dna[0..3];
+        if !is_start_codon(first_codon, table) {
+            return None;
+        }
+        // Check last codon is a stop codon
+        let last_codon = &dna[dna.len() - 3..];
+        let last_aa = translate_codon(last_codon, table)?;
+        if last_aa != b'*' {
+            return None;
+        }
     }
 
     let codons = dna.len() / 3;
@@ -24,7 +53,12 @@ pub fn translate(dna: &[u8], table: u8) -> Option<Vec<u8>> {
             }
         }
 
-        protein.push(aa);
+        // In CDS mode, replace first codon with M
+        if i == 0 && cds {
+            protein.push(b'M');
+        } else {
+            protein.push(aa);
+        }
     }
 
     if protein.is_empty() {
@@ -32,6 +66,33 @@ pub fn translate(dna: &[u8], table: u8) -> Option<Vec<u8>> {
     }
 
     Some(protein)
+}
+
+/// Check if a codon is a valid start codon for the given genetic code table.
+fn is_start_codon(codon: &[u8], table: u8) -> bool {
+    let upper: [u8; 3] = [
+        codon[0].to_ascii_uppercase(),
+        codon[1].to_ascii_uppercase(),
+        codon[2].to_ascii_uppercase(),
+    ];
+    match table {
+        // Table 11 start codons: TTG, CTG, ATT, ATC, ATA, ATG, GTG
+        11 => matches!(
+            &upper,
+            b"TTG" | b"CTG" | b"ATT" | b"ATC" | b"ATA" | b"ATG" | b"GTG"
+        ),
+        // Table 1 start codons: ATG only (standard)
+        1 => &upper == b"ATG",
+        // Table 4 start codons: TTA, TTG, CTG, ATT, ATC, ATA, ATG, GTG
+        4 => matches!(
+            &upper,
+            b"TTA" | b"TTG" | b"CTG" | b"ATT" | b"ATC" | b"ATA" | b"ATG" | b"GTG"
+        ),
+        _ => matches!(
+            &upper,
+            b"TTG" | b"CTG" | b"ATT" | b"ATC" | b"ATA" | b"ATG" | b"GTG"
+        ),
+    }
 }
 
 /// Translate a single codon to amino acid.
@@ -121,5 +182,54 @@ mod tests {
     fn test_ambiguous_base() {
         let dna = b"ATGNNN";
         assert!(translate(dna, 11).is_none());
+    }
+
+    #[test]
+    fn test_translate_cds_ttg_start() {
+        // TTG normally translates to L, but in CDS mode → M
+        let dna = b"TTGGCTTAA";
+        let protein = translate_cds(dna, 11, true).unwrap();
+        assert_eq!(protein, b"MA");
+        // Without CDS mode, TTG → L
+        let protein_std = translate(dna, 11).unwrap();
+        assert_eq!(protein_std, b"LA");
+    }
+
+    #[test]
+    fn test_translate_cds_gtg_start() {
+        // GTG normally translates to V, but in CDS mode → M
+        let dna = b"GTGGCTTAA";
+        let protein = translate_cds(dna, 11, true).unwrap();
+        assert_eq!(protein, b"MA");
+        let protein_std = translate(dna, 11).unwrap();
+        assert_eq!(protein_std, b"VA");
+    }
+
+    #[test]
+    fn test_translate_cds_atg_start() {
+        // ATG → M in both modes
+        let dna = b"ATGGCTTAA";
+        let protein = translate_cds(dna, 11, true).unwrap();
+        assert_eq!(protein, b"MA");
+    }
+
+    #[test]
+    fn test_translate_cds_no_stop_rejected() {
+        // CDS mode requires terminal stop codon
+        let dna = b"ATGGCT"; // ATG (M) + GCT (A), no stop
+        assert!(translate_cds(dna, 11, true).is_none());
+        // Standard mode accepts it
+        let protein = translate(dna, 11).unwrap();
+        assert_eq!(protein, b"MA");
+    }
+
+    #[test]
+    fn test_translate_cds_invalid_start_rejected() {
+        // CDS mode requires valid start codon
+        let dna = b"GCTGCTTAA"; // GCT is not a start codon
+        assert!(translate_cds(dna, 11, true).is_none());
+        // Standard mode accepts it
+        let protein = translate(dna, 11).unwrap();
+        assert_eq!(protein, b"AA");
     }
 }

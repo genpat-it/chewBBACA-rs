@@ -9,7 +9,7 @@
 
 A high-performance allele caller for cgMLST/wgMLST schemas, inspired by and compatible with [chewBBACA](https://github.com/B-UMMI/chewBBACA).
 
-**chewcall** reimplements the AlleleCall algorithm from chewBBACA in Rust, replacing BLASTp with SIMD-accelerated Smith-Waterman alignment via [parasail](https://github.com/jeffdaily/parasail), achieving up to **17x faster** allele calling while producing statistically equivalent results.
+**chewcall** reimplements the AlleleCall algorithm from chewBBACA in Rust, replacing BLASTp with SIMD-accelerated Smith-Waterman alignment via [parasail](https://github.com/jeffdaily/parasail), achieving **5-12x faster** allele calling with **identical or near-identical** results (100% match on *L. monocytogenes* cgMLST).
 
 ## Overview
 
@@ -20,8 +20,8 @@ A high-performance allele caller for cgMLST/wgMLST schemas, inspired by and comp
 ### Key features
 
 - **Compatible** with chewBBACA schemas (Chewie-NS, PrepExternalSchema, CreateSchema)
-- **Statistically equivalent** to chewBBACA AlleleCall (Cohen's Kappa = 0.9993, see [Validation](#validation))
-- **14-17x faster** than chewBBACA on multi-core systems
+- **Identical results** for *L. monocytogenes* cgMLST, **>99.98% match** across all tested organisms (see [Validation](#validation))
+- **5-12x faster** than chewBBACA on multi-core systems
 - **Parallel everything**: schema loading, CDS deduplication, clustering, and SW alignment via [rayon](https://github.com/rayon-rs/rayon)
 - **Optional GPU acceleration** via CUDA for large-scale datasets
 - **Minimizer-based pre-filtering**: top-K cluster selection reduces alignment pairs by ~8x without affecting results
@@ -29,49 +29,41 @@ A high-performance allele caller for cgMLST/wgMLST schemas, inspired by and comp
 
 ## Validation
 
-Validated on *Salmonella enterica* wgMLST (8558 loci, 100 genomes from [BeONE](https://onehealthejp.eu/projects/foodborne-zoonoses/jrp-beone)) comparing chewcall vs chewBBACA v3.3.10 AlleleCall (mode 4, same schema from [Chewie-NS](https://chewbbaca.online/)).
+Validated on 4 organisms from the [BeONE](https://onehealthejp.eu/projects/foodborne-zoonoses/jrp-beone) project (100 genomes each), comparing chewcall vs chewBBACA v3.3.10 AlleleCall (mode 4). Schemas from [Chewie-NS](https://chewbbaca.online/). Both tools use the same pre-computed CDS (pyrodigal) to ensure identical gene predictions.
 
-### Statistical equivalence
+CRC32-hashed allelic profiles are compared cell-by-cell. CRC32 hashing maps each allele to the hash of its DNA sequence, making the comparison independent of allele ID numbering:
 
-| Metric | Value |
-|--------|-------|
-| **Cohen's Kappa** | 0.9993 (near-perfect agreement) |
-| **Pearson correlation** (CRC32 hashes) | r = 0.99996 |
-| **CRC32 hashed matrix match** | 99.97% (855,522 / 855,800 cells) |
-| **Per-genome Hamming distance** | mean 2.78 / 8558 loci (0.03%) |
-| **McNemar's test** | chewcall finds 166 more alleles (0.02%) |
-| **TOST equivalence test** | Statistically equivalent (p < 0.001) |
+| Organism | Loci | Cells | CRC32 match |
+|----------|------|-------|-------------|
+| *L. monocytogenes* | 1748 (cgMLST) | 174,800 | **100.0000% (IDENTICAL)** |
+| *S. enterica* | 8558 (wgMLST) | 855,800 | 99.986% |
+| *E. coli* | 7601 (wgMLST) | 760,100 | 99.995% |
+| *C. jejuni* | 2794 (wgMLST) | 279,400 | 99.996% |
 
-The 278 discordant cells (0.03%) are due to alignment boundary effects between parasail SIMD and BLASTp — not systematic errors. These affect borderline BSR cases near the classification threshold.
+### Why are there remaining differences?
 
-### Classification breakdown
+chewBBACA uses **BLASTp** for protein alignment, while chewcall uses **parasail Smith-Waterman** (BLOSUM62, gap_open=11, gap_extend=1). Both use the same scoring matrix and gap penalties, but BLAST employs **database-size-dependent heuristics** (E-value thresholds, word seeding) that parasail's exact Smith-Waterman does not.
 
-On 855,800 total cells (100 genomes x 8558 loci):
-- **EXC/INF** (allele found): 99.97% agreement
-- **LNF** (locus not found): 99.98% agreement
-- **ASM/ALM/PLOT** (partial matches): minor differences from alignment boundary effects
+The ~0.01% remaining differences across wgMLST schemas arise from:
+
+1. **Borderline hit discovery** — BLAST's word-seeding heuristics may find or miss alignments near the BSR threshold (0.6) that exact Smith-Waterman handles differently. Neither tool is "wrong" — these are genuinely borderline cases where the alignment score is close to the classification threshold.
+
+2. **Cascading novel allele effects** — When one tool discovers a novel allele (INF) that the other misses, subsequent genomes can match that novel allele. A single borderline difference in one genome can cascade into multiple discordant cells across other genomes for the same locus. This explains why most differences cluster around a few specific loci (e.g., *wgMLST-00027883* in *E. coli*).
+
+3. **Per-cluster vs all-at-once BLAST** — chewBBACA creates separate BLAST databases per cluster, which changes the effective E-value threshold for each search. chewcall's parasail alignment has no database-size dependency, providing deterministic scoring regardless of how many sequences are being compared.
+
+Notably, *L. monocytogenes* cgMLST (1748 loci) produces **100% identical results**, demonstrating that the pipeline logic is correct. The remaining wgMLST differences affect only a handful of loci per organism and do not impact epidemiological conclusions.
 
 ## Performance
 
-Benchmarked on [BeONE](https://onehealthejp.eu/projects/foodborne-zoonoses/jrp-beone) datasets (100 genomes each, 8 CPU threads). Schemas from [Chewie-NS](https://chewbbaca.online/).
+Benchmarked on [BeONE](https://onehealthejp.eu/projects/foodborne-zoonoses/jrp-beone) datasets (100 genomes each, 8 CPU threads). Schemas from [Chewie-NS](https://chewbbaca.online/). Both tools use pre-computed CDS from pyrodigal.
 
 | Organism | Loci | Schema | chewBBACA | chewcall | Speedup | CRC32 match |
 |----------|------|--------|-----------|----------|---------|-------------|
-| *L. monocytogenes* | 1748 | cgMLST | 57.6s | 4.6s | **12.5x** | 99.95% |
-| *S. enterica* | 8558 | wgMLST | 226.7s | 12.9s | **17.6x** | 99.97% |
-| *E. coli* | 7601 | wgMLST | 390.2s | 29.9s | **13.0x** | 99.84% |
-| *C. jejuni* | 2794 | wgMLST | 101.4s | 7.9s | **12.9x** | 99.91% |
-
-### Scaling
-
-Benchmarked on *L. monocytogenes* cgMLST (1748 loci, 100 genomes):
-
-| Mode | Time | Speedup vs chewBBACA |
-|------|------|----------------------|
-| chewBBACA (8 threads) | 58.4s | 1x |
-| **chewcall** (4 threads) | 7.8s | **7.5x** |
-| **chewcall** (8 threads) | 4.6s | **12.6x** |
-| **chewcall** (16 threads) | 2.7s | **21.5x** |
+| *L. monocytogenes* | 1748 | cgMLST | 50s | 4.1s | **12.4x** | **IDENTICAL** |
+| *S. enterica* | 8558 | wgMLST | 130s | 22.2s | **5.9x** | 99.986% |
+| *E. coli* | 7601 | wgMLST | 388s | 53.6s | **7.2x** | 99.995% |
+| *C. jejuni* | 2794 | wgMLST | 100s | 10.4s | **9.6x** | 99.996% |
 
 ## Installation
 
@@ -191,7 +183,8 @@ chewcall follows the same pipeline as chewBBACA AlleleCall:
 
 - **SIMD Smith-Waterman** via [parasail](https://github.com/jeffdaily/parasail) (AVX2/SSE4.1) replaces BLASTp. Same BLOSUM62 matrix and affine gap penalties (open=11, extend=1).
 - **Minimizer pre-filter** replaces BLASTp's internal word seeding. Top-5 candidates per query by shared minimizer count.
-- **No BLAST dependency** - only requires parasail shared library.
+- **No BLAST dependency** — only requires parasail shared library.
+- **Read-only schema** — novel alleles are written to `novel_alleles.fasta` but not appended to the schema.
 - **Optional GPU mode** via CUDA for large-scale alignment batches.
 
 ## Limitations
