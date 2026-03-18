@@ -53,7 +53,7 @@ To assess accuracy on the loci that matter most for epidemiological surveillance
 | *E. coli* | 2805 | 280,500 | **100.0000% (IDENTICAL)** |
 | *C. jejuni* | 994 | 99,400 | **100.0000% (IDENTICAL)** |
 
-Three out of four organisms produce **100% identical** core genome profiles. The 6 remaining *S. enterica* core diffs are all cases where chewcall correctly identifies alleles (INF) that chewBBACA misses (LNF), concentrated on 2 borderline loci at the 95% presence threshold (wgMLST-00047202, present in 95/100 genomes, and wgMLST-00047811, 99/100). At a 98% presence threshold, only 1 diff remains across all organisms.
+Three out of four organisms produce **100% identical** core genome profiles. The 6 remaining *S. enterica* core diffs are concentrated on 2 loci at the 95% presence boundary (wgMLST-00047202, present in 95/100 genomes, and wgMLST-00047811, 99/100): chewcall classifies them as INF (novel allele) while chewBBACA reports LNF (not found). These are borderline cases where the different alignment engines (parasail exact SW vs BLAST heuristic) disagree on whether the match passes the BSR threshold. At a 98% presence threshold, only 1 diff remains across all organisms.
 
 ### Why are there remaining wgMLST differences?
 
