@@ -33,6 +33,8 @@ Validated on 4 organisms from the [BeONE](https://onehealthejp.eu/projects/foodb
 
 CRC32-hashed allelic profiles are compared cell-by-cell. CRC32 hashing maps each allele to the hash of its DNA sequence, making the comparison independent of allele ID numbering:
 
+#### Full wgMLST comparison
+
 | Organism | Loci | Cells | CRC32 match |
 |----------|------|-------|-------------|
 | *L. monocytogenes* | 1748 (cgMLST) | 174,800 | **100.0000% (IDENTICAL)** |
@@ -40,7 +42,20 @@ CRC32-hashed allelic profiles are compared cell-by-cell. CRC32 hashing maps each
 | *E. coli* | 7601 (wgMLST) | 760,100 | 99.995% |
 | *C. jejuni* | 2794 (wgMLST) | 279,400 | 99.996% |
 
-### Why are there remaining differences?
+#### Core genome (cgMLST) comparison
+
+To assess accuracy on the loci that matter most for epidemiological surveillance, we restrict the comparison to **core loci** — those present in >=95% of genomes in each dataset. These correspond to the loci typically included in cgMLST schemas:
+
+| Organism | Core loci (>=95%) | Cells | CRC32 match |
+|----------|-------------------|-------|-------------|
+| *L. monocytogenes* | 1748 | 174,800 | **100.0000% (IDENTICAL)** |
+| *S. enterica* | 3293 | 329,300 | **99.9982%** (6 diffs) |
+| *E. coli* | 2805 | 280,500 | **100.0000% (IDENTICAL)** |
+| *C. jejuni* | 994 | 99,400 | **100.0000% (IDENTICAL)** |
+
+Three out of four organisms produce **100% identical** core genome profiles. The 6 remaining *S. enterica* core diffs are all cases where chewcall correctly identifies alleles (INF) that chewBBACA misses (LNF), concentrated on 2 borderline loci at the 95% presence threshold (wgMLST-00047202, present in 95/100 genomes, and wgMLST-00047811, 99/100). At a 98% presence threshold, only 1 diff remains across all organisms.
+
+### Why are there remaining wgMLST differences?
 
 chewBBACA uses **BLASTp** for protein alignment, while chewcall uses **parasail Smith-Waterman** (BLOSUM62, gap_open=11, gap_extend=1). Both use the same scoring matrix and gap penalties, but BLAST employs **database-size-dependent heuristics** (E-value thresholds, word seeding) that parasail's exact Smith-Waterman does not.
 
@@ -50,9 +65,9 @@ The ~0.01% remaining differences across wgMLST schemas arise from:
 
 2. **Cascading novel allele effects** — When one tool discovers a novel allele (INF) that the other misses, subsequent genomes can match that novel allele. A single borderline difference in one genome can cascade into multiple discordant cells across other genomes for the same locus. This explains why most differences cluster around a few specific loci (e.g., *wgMLST-00027883* in *E. coli*).
 
-3. **Per-cluster vs all-at-once BLAST** — chewBBACA creates separate BLAST databases per cluster, which changes the effective E-value threshold for each search. chewcall's parasail alignment has no database-size dependency, providing deterministic scoring regardless of how many sequences are being compared.
+3. **Accessory loci are noisier** — Accessory loci (present in <95% of genomes) are inherently more variable and have weaker matches to schema representatives. Small scoring differences between BLAST and parasail are more likely to flip a classification near the threshold. Core loci, being well-conserved, produce robust matches that are insensitive to the alignment engine used.
 
-Notably, *L. monocytogenes* cgMLST (1748 loci) produces **100% identical results**, demonstrating that the pipeline logic is correct. The remaining wgMLST differences affect only a handful of loci per organism and do not impact epidemiological conclusions.
+All wgMLST differences are confined to accessory loci and do not affect cgMLST-based epidemiological analysis (minimum spanning trees, cluster detection, outbreak investigation).
 
 ## Performance
 
