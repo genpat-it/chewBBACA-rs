@@ -9,7 +9,7 @@
 
 A high-performance allele caller for cgMLST/wgMLST schemas, inspired by and compatible with [chewBBACA](https://github.com/B-UMMI/chewBBACA).
 
-**chewcall** reimplements the AlleleCall algorithm from chewBBACA in Rust, replacing BLASTp with SIMD-accelerated Smith-Waterman alignment via [parasail](https://github.com/jeffdaily/parasail), achieving **5-12x faster** allele calling with **identical or near-identical** results (100% match on *L. monocytogenes* cgMLST).
+**chewcall** reimplements the AlleleCall algorithm from chewBBACA in Rust, replacing BLASTp with SIMD-accelerated Smith-Waterman alignment via [parasail](https://github.com/jeffdaily/parasail), achieving **6-12x faster** allele calling with **identical or near-identical** results (100% match on cgMLST core loci for 3 out of 4 tested organisms).
 
 ## Overview
 
@@ -20,8 +20,8 @@ A high-performance allele caller for cgMLST/wgMLST schemas, inspired by and comp
 ### Key features
 
 - **Compatible** with chewBBACA schemas (Chewie-NS, PrepExternalSchema, CreateSchema)
-- **Identical results** for *L. monocytogenes* cgMLST, **>99.98% match** across all tested organisms (see [Validation](#validation))
-- **5-12x faster** than chewBBACA on multi-core systems
+- **Identical results** on core genome loci for 3/4 tested organisms (see [Validation](#validation))
+- **6-12x faster** than chewBBACA on multi-core systems
 - **Parallel everything**: schema loading, CDS deduplication, clustering, and SW alignment via [rayon](https://github.com/rayon-rs/rayon)
 - **Optional GPU acceleration** via CUDA for large-scale datasets
 - **Minimizer-based pre-filtering**: top-K cluster selection reduces alignment pairs by ~8x without affecting results
@@ -75,10 +75,10 @@ Benchmarked on [BeONE](https://onehealthejp.eu/projects/foodborne-zoonoses/jrp-b
 
 | Organism | Loci | Schema | chewBBACA | chewcall | Speedup | CRC32 match (wgMLST) | CRC32 match (core) |
 |----------|------|--------|-----------|----------|---------|----------------------|---------------------|
-| *L. monocytogenes* | 1748 | cgMLST | 50s | 4.1s | **12.4x** | **IDENTICAL** | **IDENTICAL** |
-| *S. enterica* | 8558 | wgMLST | 130s | 22.2s | **5.9x** | 99.986% | 99.998% (3293 core loci) |
-| *E. coli* | 7601 | wgMLST | 388s | 53.6s | **7.2x** | 99.995% | **IDENTICAL** (2805 core loci) |
-| *C. jejuni* | 2794 | wgMLST | 100s | 10.4s | **9.6x** | 99.996% | **IDENTICAL** (994 core loci) |
+| *L. monocytogenes* | 1748 | cgMLST | 51s | 4.2s | **12x** | **IDENTICAL** | **IDENTICAL** |
+| *S. enterica* | 8558 | wgMLST | 131s | 22.7s | **5.8x** | 99.986% | 99.998% (3293 core loci) |
+| *E. coli* | 7601 | wgMLST | 386s | 55.6s | **6.9x** | 99.995% | **IDENTICAL** (2805 core loci) |
+| *C. jejuni* | 2794 | wgMLST | 99s | 10.6s | **9.3x** | 99.996% | **IDENTICAL** (994 core loci) |
 
 Core loci are defined as those present in >=95% of genomes in each dataset, corresponding to the loci used in cgMLST-based epidemiological surveillance.
 
