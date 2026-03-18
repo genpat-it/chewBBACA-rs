@@ -71,14 +71,16 @@ All wgMLST differences are confined to accessory loci and do not affect cgMLST-b
 
 ## Performance
 
-Benchmarked on [BeONE](https://onehealthejp.eu/projects/foodborne-zoonoses/jrp-beone) datasets (100 genomes each, 8 CPU threads). Schemas from [Chewie-NS](https://chewbbaca.online/). Both tools use pre-computed CDS from pyrodigal.
+Benchmarked on [BeONE](https://onehealthejp.eu/projects/foodborne-zoonoses/jrp-beone) datasets (100 genomes each, 8 CPU threads). Schemas from [Chewie-NS](https://chewbbaca.online/). Both tools use the same pre-computed CDS from pyrodigal to ensure identical gene predictions.
 
-| Organism | Loci | Schema | chewBBACA | chewcall | Speedup | CRC32 match |
-|----------|------|--------|-----------|----------|---------|-------------|
-| *L. monocytogenes* | 1748 | cgMLST | 50s | 4.1s | **12.4x** | **IDENTICAL** |
-| *S. enterica* | 8558 | wgMLST | 130s | 22.2s | **5.9x** | 99.986% |
-| *E. coli* | 7601 | wgMLST | 388s | 53.6s | **7.2x** | 99.995% |
-| *C. jejuni* | 2794 | wgMLST | 100s | 10.4s | **9.6x** | 99.996% |
+| Organism | Loci | Schema | chewBBACA | chewcall | Speedup | CRC32 match (wgMLST) | CRC32 match (core) |
+|----------|------|--------|-----------|----------|---------|----------------------|---------------------|
+| *L. monocytogenes* | 1748 | cgMLST | 50s | 4.1s | **12.4x** | **IDENTICAL** | **IDENTICAL** |
+| *S. enterica* | 8558 | wgMLST | 130s | 22.2s | **5.9x** | 99.986% | 99.998% (3293 core loci) |
+| *E. coli* | 7601 | wgMLST | 388s | 53.6s | **7.2x** | 99.995% | **IDENTICAL** (2805 core loci) |
+| *C. jejuni* | 2794 | wgMLST | 100s | 10.4s | **9.6x** | 99.996% | **IDENTICAL** (994 core loci) |
+
+Core loci are defined as those present in >=95% of genomes in each dataset, corresponding to the loci used in cgMLST-based epidemiological surveillance.
 
 ## Installation
 
