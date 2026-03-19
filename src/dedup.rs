@@ -1,5 +1,6 @@
 //! CDS deduplication: group identical DNA sequences by SHA256 hash.
 
+use rayon::prelude::*;
 use rustc_hash::FxHashMap;
 
 use crate::types::*;
@@ -9,16 +10,26 @@ use crate::schema::sha256;
 /// Returns:
 /// - distinct_cds: one CDS per unique sequence (the representative)
 /// - hash_to_genomes: mapping from DNA hash → list of (genome_idx, cds_id)
+/// - all_hashes: pre-computed SHA-256 hash for each CDS (parallel)
 pub fn deduplicate_cds(
     all_cds: &[Cds],
-) -> (Vec<&Cds>, FxHashMap<SeqHash, Vec<(GenomeIdx, String)>>) {
+) -> (Vec<&Cds>, FxHashMap<SeqHash, Vec<(GenomeIdx, String)>>, Vec<SeqHash>) {
+    // Step 1: Compute hashes in parallel
+    let all_hashes: Vec<SeqHash> = all_cds
+        .par_iter()
+        .map(|cds| {
+            let upper: Vec<u8> = cds.dna_seq.iter().map(|b| b.to_ascii_uppercase()).collect();
+            sha256(&upper)
+        })
+        .collect();
+
+    // Step 2: Build maps sequentially (HashMap is not thread-safe)
     let mut hash_to_genomes: FxHashMap<SeqHash, Vec<(GenomeIdx, String)>> = FxHashMap::default();
-    let mut seen: FxHashMap<SeqHash, usize> = FxHashMap::default(); // hash -> index in distinct_cds
+    let mut seen: FxHashMap<SeqHash, usize> = FxHashMap::default();
     let mut distinct_cds: Vec<&Cds> = Vec::new();
 
-    for cds in all_cds {
-        let upper: Vec<u8> = cds.dna_seq.iter().map(|b| b.to_ascii_uppercase()).collect();
-        let hash = sha256(&upper);
+    for (i, cds) in all_cds.iter().enumerate() {
+        let hash = all_hashes[i];
 
         hash_to_genomes
             .entry(hash)
@@ -31,5 +42,5 @@ pub fn deduplicate_cds(
         }
     }
 
-    (distinct_cds, hash_to_genomes)
+    (distinct_cds, hash_to_genomes, all_hashes)
 }

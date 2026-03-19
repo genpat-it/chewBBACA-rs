@@ -9,12 +9,13 @@
 
 A high-performance allele caller for cgMLST/wgMLST schemas, inspired by and compatible with [chewBBACA](https://github.com/B-UMMI/chewBBACA).
 
-**chewcall** reimplements the AlleleCall algorithm from chewBBACA in Rust, replacing BLASTp with SIMD-accelerated Smith-Waterman alignment via [parasail](https://github.com/jeffdaily/parasail), achieving **3.6-5.9x faster** allele calling with **identical or near-identical** results on 8 BeONE datasets (up to 3,076 genomes, 8,558 loci). Core genome profiles (>=99% presence) differ by at most 6-30 cells across millions of comparisons.
+**chewcall** reimplements the AlleleCall algorithm from chewBBACA in Rust, replacing BLASTp with SIMD-accelerated Smith-Waterman alignment via [parasail](https://github.com/jeffdaily/parasail), achieving **~10x faster** allele calling with **fully deterministic, near-identical** results on 8 BeONE datasets (up to 3,076 genomes, 8,558 loci). Core genome profiles (>=99% presence) differ by at most 6-30 cells across millions of comparisons.
 
 ### Key features
 
 - **Compatible** with chewBBACA schemas (Chewie-NS, PrepExternalSchema, CreateSchema)
-- **4-6x faster** than chewBBACA on multi-core systems
+- **~10x faster** than chewBBACA on multi-core systems (8 threads)
+- **Fully deterministic** — identical results on every run
 - **Identical core genome results** for most organisms (see [Validation](#validation))
 - **Parallel everything**: schema loading, CDS deduplication, clustering, and SW alignment via [rayon](https://github.com/rayon-rs/rayon)
 - **Optional GPU acceleration** via CUDA for large-scale datasets
@@ -191,10 +192,10 @@ Benchmarked on 8 [BeONE](https://onehealthejp.eu/projects/foodborne-zoonoses/jrp
 
 | Dataset | Organism | Genomes | Loci | chewBBACA | chewcall | Speedup |
 |---------|----------|---------|------|-----------|----------|---------|
-| Consortium | *L. monocytogenes* | 1,426 | 1,748 | 156s | 38.5s | **4.1x** |
-| Consortium | *S. enterica* | 1,540 | 8,558 | 586s | 147s | **4.0x** |
-| Consortium | *E. coli* | 308 | 7,601 | 570s | 97s | **5.9x** |
-| Consortium | *C. jejuni* | 610 | 2,794 | 215s | 49.5s | **4.3x** |
+| Consortium | *L. monocytogenes* | 1,426 | 1,748 | 156s | 15.5s | **10.1x** |
+| Consortium | *S. enterica* | 1,540 | 8,558 | 586s | 66.4s | **8.8x** |
+| Consortium | *E. coli* | 308 | 7,601 | 570s | 56.3s | **10.1x** |
+| Consortium | *C. jejuni* | 610 | 2,794 | 215s | 21.8s | **9.9x** |
 | Public | *L. monocytogenes* | 1,874 | 1,748 | 203s | 53.6s | **3.8x** |
 | Public | *S. enterica* | 1,434 | 8,558 | 690s | 191.7s | **3.6x** |
 | Public | *E. coli* | 1,999 | 7,601 | 1,615s | 417.8s | **3.9x** |

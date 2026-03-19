@@ -324,12 +324,19 @@ fn compute_mode(lengths: &[u32]) -> u32 {
     if lengths.is_empty() {
         return 0;
     }
+    // Track counts and first occurrence order (to match Python Counter.most_common() tie-breaking)
     let mut counts: HashMap<u32, u32> = HashMap::new();
-    for &l in lengths {
+    let mut first_seen: HashMap<u32, usize> = HashMap::new();
+    for (i, &l) in lengths.iter().enumerate() {
         *counts.entry(l).or_default() += 1;
+        first_seen.entry(l).or_insert(i);
     }
+    // Break ties by first occurrence order (matches Python Counter insertion order)
     counts.into_iter()
-        .max_by_key(|&(_, count)| count)
+        .max_by(|a, b| {
+            a.1.cmp(&b.1)
+                .then(first_seen.get(&b.0).cmp(&first_seen.get(&a.0)))
+        })
         .map(|(len, _)| len)
         .unwrap_or(0)
 }

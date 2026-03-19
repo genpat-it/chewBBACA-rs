@@ -76,6 +76,87 @@ struct BlastRawHit {
     slen: u32,
 }
 
+/// Parasail-based validation for RepDet borderline hits (deterministic, no BLAST).
+///
+/// For each borderline CDS, re-aligns against ALL representatives for the matched
+/// locus using parasail SIMD Smith-Waterman. This ensures the best rep is found
+/// (not just the top-5 from minimizer clustering) while being fully deterministic.
+pub fn validate_repdet_hits_parasail(
+    hits_by_locus: &FxHashMap<usize, Vec<ClusterResult>>,
+    proteins_by_idx: &FxHashMap<usize, Vec<u8>>,
+    representatives: &[Representative],
+    bsr_threshold: f64,
+) -> FxHashMap<usize, Vec<ClusterResult>> {
+    use rayon::prelude::*;
+    use crate::parasail_ffi;
+
+    // Pre-build locus → rep indices mapping
+    let mut locus_reps: FxHashMap<u32, Vec<usize>> = FxHashMap::default();
+    for (ri, rep) in representatives.iter().enumerate() {
+        locus_reps.entry(rep.locus_idx).or_default().push(ri);
+    }
+
+    let loci: Vec<usize> = hits_by_locus.keys()
+        .filter(|&&locus| {
+            hits_by_locus.get(&locus)
+                .map(|hits| hits.iter().any(|h| h.best_bsr >= bsr_threshold))
+                .unwrap_or(false)
+        })
+        .copied()
+        .collect();
+
+    loci.par_iter()
+        .map(|&locus_idx| {
+            let hits = &hits_by_locus[&locus_idx];
+            let rep_indices = locus_reps.get(&(locus_idx as u32)).cloned().unwrap_or_default();
+
+            let mut best_per_cds: FxHashMap<usize, ClusterResult> = FxHashMap::default();
+
+            for hit in hits {
+                if hit.best_bsr < bsr_threshold { continue; }
+                let Some(protein) = proteins_by_idx.get(&hit.cds_idx) else { continue };
+
+                for &rep_idx in &rep_indices {
+                    let rep = &representatives[rep_idx];
+                    if rep.self_score <= 0.0 { continue; }
+
+                    let (score, _, _) = parasail_ffi::sw_simd(protein, &rep.protein_seq);
+                    let bsr = score as f64 / rep.self_score;
+                    if bsr < bsr_threshold { continue; }
+
+                    let is_better = match best_per_cds.get(&hit.cds_idx) {
+                        None => true,
+                        Some(e) => score > e.score
+                            || (score == e.score && rep_idx < e.representative_idx),
+                    };
+                    if is_better {
+                        let (_, _, _, target_start, target_end) =
+                            parasail_ffi::sw_simd_full(protein, &rep.protein_seq);
+                        best_per_cds.insert(hit.cds_idx, ClusterResult {
+                            cds_idx: hit.cds_idx,
+                            representative_idx: rep_idx,
+                            best_locus: locus_idx as u32,
+                            best_bsr: bsr,
+                            score,
+                            rep_dna_len: rep.dna_length,
+                            query_start: 0,
+                            query_end: 0,
+                            query_len: protein.len() as u32,
+                            target_start,
+                            target_end,
+                            target_len: rep.protein_seq.len() as u32,
+                        });
+                    }
+                }
+            }
+
+            let mut validated: Vec<_> = best_per_cds.into_values().collect();
+            validated.sort_unstable_by(|a, b| b.score.cmp(&a.score).then(a.cds_idx.cmp(&b.cds_idx)));
+            (locus_idx, validated)
+        })
+        .collect()
+}
+
 /// Re-score borderline hits for one locus with BLAST and keep only hits that
 /// still satisfy the BSR threshold under BLAST's raw scores.
 pub fn validate_locus_hits(
@@ -218,7 +299,12 @@ pub fn validate_locus_hits(
                 qlen,
                 slen,
             };
-            if !best_raw_per_cds.contains_key(&cds_idx) {
+            let dominated = match best_raw_per_cds.get(&cds_idx) {
+                None => true,
+                Some(e) => candidate.score > e.score
+                    || (candidate.score == e.score && candidate.rep_idx < e.rep_idx),
+            };
+            if dominated {
                 best_raw_per_cds.insert(cds_idx, candidate);
             }
         }

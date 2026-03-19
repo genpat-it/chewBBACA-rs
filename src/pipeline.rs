@@ -159,26 +159,7 @@ fn process_locus_hits(
     let mut seen_prot: FxHashSet<SeqHash> = FxHashSet::default();
     let mut excluded_cds: FxHashSet<usize> = FxHashSet::default();
     let mut first_inf_by_genome: FxHashMap<usize, BorderlineCandidate> = FxHashMap::default();
-    let debug_loci: Option<FxHashSet<String>> = std::env::var("CHEWCALL_DEBUG_LOCI")
-        .ok()
-        .map(|value| {
-            value.split(',')
-                .map(str::trim)
-                .filter(|entry| !entry.is_empty())
-                .map(str::to_owned)
-                .collect()
-        });
-    let debug_genomes: Option<FxHashSet<usize>> = std::env::var("CHEWCALL_DEBUG_GENOMES")
-        .ok()
-        .map(|value| {
-            value.split(',')
-                .map(str::trim)
-                .filter(|entry| !entry.is_empty())
-                .filter_map(|entry| entry.parse::<usize>().ok())
-                .collect()
-        });
-
-    for hit in hits {
+    for hit in hits.iter() {
         if hit.best_bsr < bsr_threshold {
             continue;
         }
@@ -233,37 +214,6 @@ fn process_locus_hits(
                 let gi = genome_idx as usize;
                 if gi >= all_results.len() || locus_idx >= all_results[gi].len() {
                     continue;
-                }
-                if debug_loci
-                    .as_ref()
-                    .map(|wanted| wanted.contains(loci_list[locus_idx].as_str()))
-                    .unwrap_or(false)
-                    && debug_genomes
-                        .as_ref()
-                        .map(|wanted| wanted.contains(&gi))
-                        .unwrap_or(true)
-                {
-                    eprintln!(
-                        "DEBUG locus={} genome_idx={} phase={} cds_idx={} cds_id={} cds_len={} coord={} current={} incoming={} bsr={:.4} rep_dna_len={} target={}..{}/{}",
-                        loci_list[locus_idx],
-                        gi,
-                        if candidate_upper_bsr.is_some() { "repdet" } else { "phase4" },
-                        related_cds_idx,
-                        cds_item.id,
-                        cds_item.dna_seq.len(),
-                        cds_item
-                            .coord
-                            .as_ref()
-                            .map(|coord| format!("{}:{}-{}:{}", coord.contig, coord.start, coord.stop, coord.strand))
-                            .unwrap_or_else(|| "-".to_owned()),
-                        all_results[gi][locus_idx].class.as_str(),
-                        class.as_str(),
-                        hit.best_bsr,
-                        hit.rep_dna_len,
-                        hit.target_start,
-                        hit.target_end,
-                        hit.target_len,
-                    );
                 }
                 if only_fill_lnf && all_results[gi][locus_idx].class != Classification::LNF {
                     continue;
@@ -372,6 +322,7 @@ fn select_new_representatives(
     unmatched_cds: &[&Cds],
     proteins_by_idx: &FxHashMap<usize, Vec<u8>>,
     bsr_threshold: f64,
+    use_blast: bool,
 ) -> Vec<Representative> {
     use crate::parasail_ffi;
 
@@ -384,6 +335,7 @@ fn select_new_representatives(
         cds_indices.sort_unstable();
         cds_indices.dedup();
 
+        if use_blast {
         if let Some(selected_indices) =
             blast::select_representative_candidates(&cds_indices, proteins_by_idx, bsr_threshold)
         {
@@ -402,6 +354,7 @@ fn select_new_representatives(
             }
             continue;
         }
+        } // use_blast
 
         let mut self_scores: FxHashMap<usize, f64> = FxHashMap::default();
         for &cds_idx in &cds_indices {
@@ -684,7 +637,7 @@ pub fn run_allele_call(
 
     // --- Phase 2: Deduplication ---
     let t2 = std::time::Instant::now(); eprintln!("  [TIMING] Phase 1: {:.1}s", t2.duration_since(t1).as_secs_f64()); eprintln!("[Phase 2] Deduplicating CDS...");
-    let (distinct_cds, hash_to_genomes) = dedup::deduplicate_cds(&all_cds);
+    let (distinct_cds, hash_to_genomes, all_cds_hashes) = dedup::deduplicate_cds(&all_cds);
     eprintln!("  Distinct CDS: {} (from {})", distinct_cds.len(), all_cds.len());
 
     // Track classification per CDS hash → locus
@@ -989,7 +942,7 @@ pub fn run_allele_call(
                 &loci_list,
                 config,
             );
-            phase4_excluded.extend(excluded);
+            phase4_excluded.extend(&excluded);
         }
     }
 
@@ -999,6 +952,7 @@ pub fn run_allele_call(
         "  [TIMING] Phase 4: {:.1}s",
         t5.duration_since(t4).as_secs_f64()
     );
+    eprintln!("  Phase 4 excluded: {}", phase4_excluded.len());
     let mut still_unmatched: Vec<(usize, Vec<u8>)> = cluster_input
         .iter()
         .filter(|(idx, _)| !phase4_excluded.contains(idx))
@@ -1019,6 +973,7 @@ pub fn run_allele_call(
         if still_unmatched.is_empty() || current_reps.is_empty() {
             break;
         }
+        let t5_iter_start = std::time::Instant::now();
 
         let repdet_hits = if config.align_mode == crate::types::AlignMode::Compatible {
             // Compatible mode: use BLAST for repdet
@@ -1047,74 +1002,75 @@ pub fn run_allele_call(
                 repdet_threshold,
             )
         };
+        let t5_align_done = std::time::Instant::now();
+        eprintln!("    iter {}: align {:.1}s ({} unmatched, {} reps, {} hits)",
+            iteration,
+            t5_align_done.duration_since(t5_iter_start).as_secs_f64(),
+            still_unmatched.len(), current_reps.len(), repdet_hits.len());
         if repdet_hits.is_empty() {
             break;
         }
         repdet_match_count += repdet_hits.len();
 
         let hits_by_locus = group_hits_by_locus(repdet_hits);
-        let mut loci: Vec<_> = hits_by_locus.keys().copied().collect();
+
+        // Split hits into validated (BSR >= threshold+0.1) and borderline (threshold..threshold+0.1)
+        // Only borderline hits need BLAST re-validation
+        let borderline_by_locus: FxHashMap<usize, Vec<cluster::ClusterResult>> = hits_by_locus.iter()
+            .filter_map(|(&locus, hits)| {
+                let borderline: Vec<_> = hits.iter()
+                    .filter(|h| h.best_bsr >= repdet_threshold && h.best_bsr < repdet_candidate_upper)
+                    .cloned()
+                    .collect();
+                if borderline.is_empty() { None } else { Some((locus, borderline)) }
+            })
+            .collect();
+
+        // Validate borderline hits with parasail (deterministic, no BLAST subprocess)
+        let parasail_validated: FxHashMap<usize, Vec<cluster::ClusterResult>> =
+            if config.align_mode == crate::types::AlignMode::Compatible || borderline_by_locus.is_empty() {
+                FxHashMap::default()
+            } else {
+                blast::validate_repdet_hits_parasail(
+                    &borderline_by_locus,
+                    &proteins_by_idx,
+                    &current_reps,
+                    repdet_threshold,
+                )
+            };
+
+        // Merge: validated (high BSR) + BLAST-validated borderline
+        let mut validated_by_locus: FxHashMap<usize, Vec<cluster::ClusterResult>> = FxHashMap::default();
+        for (&locus, hits) in &hits_by_locus {
+            let mut merged: Vec<cluster::ClusterResult> = if config.align_mode == crate::types::AlignMode::Compatible {
+                // Compatible mode: BLAST scores already correct, keep all above threshold
+                hits.iter()
+                    .filter(|h| h.best_bsr >= repdet_threshold)
+                    .cloned()
+                    .collect()
+            } else {
+                // Fast mode: keep high-BSR hits directly
+                hits.iter()
+                    .filter(|h| h.best_bsr >= repdet_candidate_upper)
+                    .cloned()
+                    .collect()
+            };
+            // Add BLAST-validated borderline hits
+            if let Some(validated) = parasail_validated.get(&locus) {
+                merged.extend(validated.iter().cloned());
+            }
+            merged.sort_unstable_by(|a, b| b.score.cmp(&a.score).then(a.cds_idx.cmp(&b.cds_idx)));
+            validated_by_locus.insert(locus, merged);
+        }
+
+        let mut loci: Vec<_> = validated_by_locus.keys().copied().collect();
         loci.sort_unstable();
 
         let mut newly_excluded: FxHashSet<usize> = FxHashSet::default();
         let mut candidate_cds_by_locus: FxHashMap<usize, Vec<usize>> = FxHashMap::default();
 
         for locus_idx in loci {
-            if let Some(hits) = hits_by_locus.get(&locus_idx) {
-                let validated_hits = if config.align_mode == crate::types::AlignMode::Compatible {
-                    // Compatible mode: BLAST scores are already correct, no borderline validation needed
-                    let mut all_hits: Vec<cluster::ClusterResult> = hits
-                        .iter()
-                        .filter(|hit| hit.best_bsr >= repdet_threshold)
-                        .cloned()
-                        .collect();
-                    all_hits.sort_unstable_by(|a, b| {
-                        b.score.cmp(&a.score).then(a.cds_idx.cmp(&b.cds_idx))
-                    });
-                    all_hits
-                } else {
-                    // Fast mode: split into validated/borderline, re-check borderline with BLAST
-                    let mut validated_hits: Vec<cluster::ClusterResult> = hits
-                        .iter()
-                        .filter(|hit| hit.best_bsr >= repdet_candidate_upper)
-                        .cloned()
-                        .collect();
-                    let borderline_hits: Vec<cluster::ClusterResult> = hits
-                        .iter()
-                        .filter(|hit| hit.best_bsr >= repdet_threshold && hit.best_bsr < repdet_candidate_upper)
-                        .cloned()
-                        .collect();
-                    if !borderline_hits.is_empty() {
-                        let newly_validated = blast::validate_locus_hits(
-                            &borderline_hits,
-                            &proteins_by_idx,
-                            &current_reps,
-                            repdet_threshold,
-                        );
-                        if std::env::var("CHEWCALL_DEBUG_LOCI")
-                            .ok()
-                            .map(|value| value.split(',').any(|entry| entry.trim() == loci_list[locus_idx]))
-                            .unwrap_or(false)
-                        {
-                            for hit in &newly_validated {
-                                eprintln!(
-                                    "DEBUG validated locus={} cds_idx={} rep={} rep_id={} bsr={:.4} score={}",
-                                    loci_list[locus_idx],
-                                    hit.cds_idx,
-                                    hit.representative_idx,
-                                    current_reps[hit.representative_idx].seq_id,
-                                    hit.best_bsr,
-                                    hit.score,
-                                );
-                            }
-                        }
-                        validated_hits.extend(newly_validated);
-                        validated_hits.sort_unstable_by(|a, b| {
-                            b.score.cmp(&a.score).then(a.cds_idx.cmp(&b.cds_idx))
-                        });
-                    }
-                    validated_hits
-                };
+            if let Some(validated_hits) = validated_by_locus.get(&locus_idx) {
                 let (excluded, candidates) = process_locus_hits(
                     locus_idx,
                     &validated_hits,
@@ -1139,6 +1095,10 @@ pub fn run_allele_call(
             }
         }
 
+        let t5_classify_done = std::time::Instant::now();
+        eprintln!("    iter {}: classify {:.1}s", iteration,
+            t5_classify_done.duration_since(t5_align_done).as_secs_f64());
+
         still_unmatched.retain(|(cds_idx, _)| !newly_excluded.contains(cds_idx));
 
         let selected_reps = select_new_representatives(
@@ -1146,6 +1106,7 @@ pub fn run_allele_call(
             &unmatched_cds,
             &proteins_by_idx,
             repdet_threshold,
+            config.align_mode == crate::types::AlignMode::Compatible,
         );
         eprintln!(
             "  RepDet iter {}: hits={}, classified={}, selected={}",
@@ -1162,6 +1123,8 @@ pub fn run_allele_call(
     }
 
     eprintln!("  RepDet matches: {}", repdet_match_count);
+    let t5_rescue = std::time::Instant::now();
+    eprintln!("  [TIMING] Phase 5 RepDet iters: {:.1}s", t5_rescue.duration_since(t5).as_secs_f64());
 
     // Rescue phase: re-BLAST unassigned CDS against all representatives.
     // Python chewBBACA does NOT have this rescue phase, so skip in compatible mode.
@@ -1183,6 +1146,7 @@ pub fn run_allele_call(
             .filter(|(_, _, dna_hash)| !assigned_hashes.contains(dna_hash))
             .map(|(idx, protein, _)| (*idx, protein.clone()))
             .collect();
+        eprintln!("  [TIMING] Rescue: {} proteins to re-align", rescue_input.len());
         if !rescue_input.is_empty() {
             let rescue_hits = cluster::cluster_and_align_multi_similarity(
                 &rescue_input,
@@ -1225,9 +1189,9 @@ pub fn run_allele_call(
     // --- Phase 6: Build contigs info ---
     let t6 = std::time::Instant::now(); eprintln!("  [TIMING] Phase 5: {:.1}s", t6.duration_since(t5).as_secs_f64()); eprintln!("[Phase 6] Building contigs info...");
     // O(all_cds) scan: for each CDS, check if it was classified to a locus
-    for cds_item in &all_cds {
-        let upper: Vec<u8> = cds_item.dna_seq.iter().map(|b| b.to_ascii_uppercase()).collect();
-        let hash = schema::sha256(&upper);
+    // Uses pre-computed hashes from Phase 2 (avoids re-hashing 4M+ sequences)
+    for (cds_i, cds_item) in all_cds.iter().enumerate() {
+        let hash = all_cds_hashes[cds_i];
         if let Some(&(locus_idx, _, _)) = cds_classifications.get(&hash) {
             let gi = cds_item.genome_idx as usize;
             let li = locus_idx as usize;
@@ -1492,3 +1456,4 @@ fn save_self_scores_cache(path: &Path, reps: &[Representative]) {
         }
     }
 }
+
