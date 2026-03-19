@@ -10,12 +10,12 @@
 
 A high-performance allele caller for cgMLST/wgMLST schemas, inspired by and compatible with [chewBBACA](https://github.com/B-UMMI/chewBBACA).
 
-**chewcall** reimplements the AlleleCall algorithm from chewBBACA in Rust, replacing BLASTp with SIMD-accelerated Smith-Waterman alignment via [parasail](https://github.com/jeffdaily/parasail), achieving **~10x faster** allele calling with **fully deterministic, near-identical** results on 8 BeONE datasets (up to 3,076 genomes, 8,558 loci). Core genome profiles (>=99% presence) differ by at most 6-30 cells across millions of comparisons.
+**chewcall** reimplements the AlleleCall algorithm from chewBBACA in Rust, replacing BLASTp with SIMD-accelerated Smith-Waterman alignment via [parasail](https://github.com/jeffdaily/parasail), achieving **6-10x faster** allele calling with **fully deterministic, near-identical** results on 8 BeONE datasets (up to 3,076 genomes, 8,558 loci).
 
 ### Key features
 
 - **Compatible** with chewBBACA schemas (Chewie-NS, PrepExternalSchema, CreateSchema)
-- **~10x faster** than chewBBACA on multi-core systems (8 threads)
+- **6-10x faster** than chewBBACA on multi-core systems (8 threads)
 - **Fully deterministic** — identical results on every run
 - **Identical core genome results** for most organisms (see [Validation](#validation))
 - **Parallel everything**: schema loading, CDS deduplication, clustering, and SW alignment via [rayon](https://github.com/rayon-rs/rayon)
@@ -134,14 +134,14 @@ Validated on 8 [BeONE](https://onehealthejp.eu/projects/foodborne-zoonoses/jrp-b
 
 | Dataset | Organism | Genomes | Loci | Cells | Diffs | CRC32 match |
 |---------|----------|---------|------|-------|-------|-------------|
-| Consortium | *L. monocytogenes* | 1,426 | 1,748 (cgMLST) | 2,492,648 | 1 | **100.0000%** |
-| Consortium | *S. enterica* | 1,540 | 8,558 (wgMLST) | 13,179,320 | 204 | 99.9985% |
-| Consortium | *E. coli* | 308 | 7,601 (wgMLST) | 2,341,108 | 152 | 99.9935% |
-| Consortium | *C. jejuni* | 610 | 2,794 (wgMLST) | 1,704,340 | 401 | 99.9765% |
-| Public | *L. monocytogenes* | 1,874 | 1,748 (cgMLST) | 3,275,752 | 1 | **100.0000%** |
-| Public | *S. enterica* | 1,434 | 8,558 (wgMLST) | 12,272,172 | 1,682 | 99.9863% |
-| Public | *E. coli* | 1,999 | 7,601 (wgMLST) | 15,194,399 | 1,633 | 99.9893% |
-| Public | *C. jejuni* | 3,076 | 2,794 (wgMLST) | 8,594,344 | 1,803 | 99.9790% |
+| Consortium | *L. monocytogenes* | 1,426 | 1,748 (cgMLST) | 2,492,648 | 7 | **99.9997%** |
+| Consortium | *S. enterica* | 1,540 | 8,558 (wgMLST) | 13,179,320 | 817 | 99.9938% |
+| Consortium | *E. coli* | 308 | 7,601 (wgMLST) | 2,341,108 | 488 | 99.9792% |
+| Consortium | *C. jejuni* | 610 | 2,794 (wgMLST) | 1,704,340 | 1,137 | 99.9333% |
+| Public | *L. monocytogenes* | 1,874 | 1,748 (cgMLST) | 3,275,752 | 26 | **99.9992%** |
+| Public | *S. enterica* | 1,434 | 8,558 (wgMLST) | 12,272,172 | 2,479 | 99.9798% |
+| Public | *E. coli* | 1,999 | 7,601 (wgMLST) | 15,194,399 | 5,073 | 99.9666% |
+| Public | *C. jejuni* | 3,076 | 2,794 (wgMLST) | 8,594,344 | 5,925 | 99.9311% |
 
 #### Core genome comparison
 
@@ -158,7 +158,7 @@ Core loci are those present in a given percentage of genomes, corresponding to t
 | Public | *E. coli* | 2,797 | 6 | 2,629 | 6 | 2,412 | 6 |
 | Public | *C. jejuni* | 1,006 | 6 | 983 | 6 | 927 | 6 |
 
-Consortium datasets show near-perfect agreement: *E. coli* and *C. jejuni* produce **100% identical** core genome profiles at any threshold, while *L. monocytogenes* has a single diff across 2.5M cells. Public datasets (larger, up to 3,076 genomes) confirm this trend: core 99% differences are at most 30 cells for *S. enterica* wgMLST and 6 cells for *E. coli* and *C. jejuni*.
+Differences are concentrated in accessory loci with borderline BSR scores, where parasail exact SW and BLASTp heuristics disagree. Core genome profiles (used in epidemiological surveillance) show much higher agreement.
 
 ### Why are there remaining wgMLST differences?
 
@@ -193,14 +193,14 @@ Benchmarked on 8 [BeONE](https://onehealthejp.eu/projects/foodborne-zoonoses/jrp
 
 | Dataset | Organism | Genomes | Loci | chewBBACA | chewcall | Speedup |
 |---------|----------|---------|------|-----------|----------|---------|
-| Consortium | *L. monocytogenes* | 1,426 | 1,748 | 156s | 15.5s | **10.1x** |
-| Consortium | *S. enterica* | 1,540 | 8,558 | 586s | 66.4s | **8.8x** |
-| Consortium | *E. coli* | 308 | 7,601 | 570s | 56.3s | **10.1x** |
-| Consortium | *C. jejuni* | 610 | 2,794 | 215s | 21.8s | **9.9x** |
-| Public | *L. monocytogenes* | 1,874 | 1,748 | 203s | 53.6s | **3.8x** |
-| Public | *S. enterica* | 1,434 | 8,558 | 690s | 191.7s | **3.6x** |
-| Public | *E. coli* | 1,999 | 7,601 | 1,615s | 417.8s | **3.9x** |
-| Public | *C. jejuni* | 3,076 | 2,794 | 477s | 118.9s | **4.0x** |
+| Consortium | *L. monocytogenes* | 1,426 | 1,748 | 148s | 14.4s | **10.3x** |
+| Consortium | *S. enterica* | 1,540 | 8,558 | 599s | 66.6s | **9.0x** |
+| Consortium | *E. coli* | 308 | 7,601 | 567s | 59.5s | **9.5x** |
+| Consortium | *C. jejuni* | 610 | 2,794 | 214s | 22.1s | **9.7x** |
+| Public | *L. monocytogenes* | 1,874 | 1,748 | 206s | 22.4s | **9.2x** |
+| Public | *S. enterica* | 1,434 | 8,558 | 687s | 93.2s | **7.4x** |
+| Public | *E. coli* | 1,999 | 7,601 | 1,586s | 259.2s | **6.1x** |
+| Public | *C. jejuni* | 3,076 | 2,794 | 473s | 65.4s | **7.2x** |
 
 ## Algorithm
 

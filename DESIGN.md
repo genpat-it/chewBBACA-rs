@@ -193,14 +193,14 @@ Validated against chewBBACA v3.5.3 on 8 BeONE datasets (4 consortium + 4 public,
 
 | Dataset | Organism | Genomes | Loci | Cells | Diffs | CRC32 match |
 |---------|----------|---------|------|-------|-------|-------------|
-| Consortium | *L. monocytogenes* | 1,426 | 1,748 | 2,492,648 | 1 | 100.0000% |
-| Consortium | *S. enterica* | 1,540 | 8,558 | 13,179,320 | 204 | 99.9985% |
-| Consortium | *E. coli* | 308 | 7,601 | 2,341,108 | 152 | 99.9935% |
-| Consortium | *C. jejuni* | 610 | 2,794 | 1,704,340 | 401 | 99.9765% |
-| Public | *L. monocytogenes* | 1,874 | 1,748 | 3,275,752 | 1 | 100.0000% |
-| Public | *S. enterica* | 1,434 | 8,558 | 12,272,172 | 1,682 | 99.9863% |
-| Public | *E. coli* | 1,999 | 7,601 | 15,194,399 | 1,633 | 99.9893% |
-| Public | *C. jejuni* | 3,076 | 2,794 | 8,594,344 | 1,803 | 99.9790% |
+| Consortium | *L. monocytogenes* | 1,426 | 1,748 | 2,492,648 | 7 | 99.9997% |
+| Consortium | *S. enterica* | 1,540 | 8,558 | 13,179,320 | 817 | 99.9938% |
+| Consortium | *E. coli* | 308 | 7,601 | 2,341,108 | 488 | 99.9792% |
+| Consortium | *C. jejuni* | 610 | 2,794 | 1,704,340 | 1,137 | 99.9333% |
+| Public | *L. monocytogenes* | 1,874 | 1,748 | 3,275,752 | 26 | 99.9992% |
+| Public | *S. enterica* | 1,434 | 8,558 | 12,272,172 | 2,479 | 99.9798% |
+| Public | *E. coli* | 1,999 | 7,601 | 15,194,399 | 5,073 | 99.9666% |
+| Public | *C. jejuni* | 3,076 | 2,794 | 8,594,344 | 5,925 | 99.9311% |
 
 ### Core genome (cgMLST)
 
@@ -223,11 +223,11 @@ Benchmarked on 8 BeONE datasets (8 CPU threads, fast mode):
 
 | Dataset | Organism | Genomes | Loci | chewBBACA | chewcall (fast) | Speedup |
 |---------|----------|---------|------|-----------|-----------------|---------|
-| Consortium | *L. monocytogenes* | 1,426 | 1,748 | 156s | 38.5s | **4.1x** |
-| Consortium | *S. enterica* | 1,540 | 8,558 | 586s | 147s | **4.0x** |
-| Consortium | *E. coli* | 308 | 7,601 | 570s | 97s | **5.9x** |
-| Consortium | *C. jejuni* | 610 | 2,794 | 215s | 49.5s | **4.3x** |
-| Public | *L. monocytogenes* | 1,874 | 1,748 | 203s | 53.6s | **3.8x** |
-| Public | *S. enterica* | 1,434 | 8,558 | 690s | 191.7s | **3.6x** |
-| Public | *E. coli* | 1,999 | 7,601 | 1,615s | 417.8s | **3.9x** |
-| Public | *C. jejuni* | 3,076 | 2,794 | 477s | 118.9s | **4.0x** |
+| Consortium | *L. monocytogenes* | 1,426 | 1,748 | 148s | 14.4s | **10.3x** |
+| Consortium | *S. enterica* | 1,540 | 8,558 | 599s | 66.6s | **9.0x** |
+| Consortium | *E. coli* | 308 | 7,601 | 567s | 59.5s | **9.5x** |
+| Consortium | *C. jejuni* | 610 | 2,794 | 214s | 22.1s | **9.7x** |
+| Public | *L. monocytogenes* | 1,874 | 1,748 | 206s | 22.4s | **9.2x** |
+| Public | *S. enterica* | 1,434 | 8,558 | 687s | 93.2s | **7.4x** |
+| Public | *E. coli* | 1,999 | 7,601 | 1,586s | 259.2s | **6.1x** |
+| Public | *C. jejuni* | 3,076 | 2,794 | 473s | 65.4s | **7.2x** |
