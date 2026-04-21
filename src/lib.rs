@@ -8,6 +8,8 @@ pub mod blast;
 pub mod cluster;
 pub mod sw;
 pub mod parasail_ffi;
+pub mod prodigal_ffi;
+pub mod prodigal_rs;
 pub mod repdet;
 pub mod output;
 pub mod pipeline;

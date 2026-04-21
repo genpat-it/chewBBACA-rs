@@ -53,6 +53,16 @@ pub fn classify_inexact(
 /// This matches Python chewBBACA's `contig_position_classification()`:
 /// - representative_leftmost_pos → (target_start - 1) * 3 in DNA
 /// - representative_rightmost_pos → target_end * 3 in DNA
+pub fn position_classification_pub(
+    coord: &CdsCoord,
+    rep_dna_len: u32,
+    target_start: u32,
+    target_end: u32,
+    target_len: u32,
+) -> Option<Classification> {
+    position_classification(coord, rep_dna_len, target_start, target_end, target_len)
+}
+
 fn position_classification(
     coord: &CdsCoord,
     rep_dna_len: u32,

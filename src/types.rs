@@ -160,6 +160,9 @@ pub struct Config {
     pub blastp_path: String,       // path to blastp binary
     pub cds_input: bool,           // true if --cds-input was used (skip PLOT classification)
     pub update_schema: bool,       // append novel alleles to schema FASTA files
+    pub minimizer_k: usize,        // minimizer k-mer size (default 5)
+    pub minimizer_w: usize,        // minimizer window size (default 5)
+    pub use_prodigal_ffi: bool,    // use libprodigal FFI instead of subprocess
 }
 
 impl Default for Config {
@@ -177,6 +180,9 @@ impl Default for Config {
             blastp_path: "blastp".to_string(),
             cds_input: false,
             update_schema: false,
+            minimizer_k: 5,
+            minimizer_w: 5,
+            use_prodigal_ffi: false,
         }
     }
 }

@@ -13,6 +13,8 @@ mod blast;
 mod cluster;
 mod sw;
 mod parasail_ffi;
+mod prodigal_ffi;
+mod prodigal_rs;
 mod repdet;
 mod output;
 mod gpu_sw;
@@ -74,6 +76,10 @@ struct Cli {
     #[arg(long)]
     prodigal_path: Option<PathBuf>,
 
+    /// Use libprodigal FFI instead of spawning prodigal subprocess (faster, requires training file)
+    #[arg(long)]
+    prodigal_ffi: bool,
+
     /// Alignment mode: "fast" (parasail SIMD, ~15x faster) or "compatible" (BLAST, 100% chewBBACA match)
     #[arg(long, default_value = "fast")]
     mode: String,
@@ -86,6 +92,14 @@ struct Cli {
     /// By default, chewcall is read-only and writes novel alleles only to the output directory.
     #[arg(long)]
     update_schema: bool,
+
+    /// Minimizer k-mer size for pre-filtering (default: 5)
+    #[arg(long, default_value = "5")]
+    minimizer_k: usize,
+
+    /// Minimizer window size for pre-filtering (default: 5)
+    #[arg(long, default_value = "5")]
+    minimizer_w: usize,
 }
 
 fn main() {
@@ -123,6 +137,9 @@ fn main() {
             .unwrap_or_else(|| "blastp".to_string()),
         cds_input: cli.cds_input.is_some(),
         update_schema: cli.update_schema,
+        minimizer_k: cli.minimizer_k,
+        minimizer_w: cli.minimizer_w,
+        use_prodigal_ffi: cli.prodigal_ffi,
     };
 
     // Discover genome files

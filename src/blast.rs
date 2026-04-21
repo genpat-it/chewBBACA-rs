@@ -36,14 +36,7 @@ fn detect_blastp() -> Option<&'static Path> {
                 return Some(path);
             }
 
-            let fallbacks = [
-                "/home/IZSNT/a.deruvo/miniconda3/envs/chewbbacca_gpu/bin/blastp",
-                "/home/IZSNT/a.deruvo/miniconda3/pkgs/blast-2.17.0-h66d330f_0/bin/blastp",
-            ];
-            fallbacks
-                .iter()
-                .map(PathBuf::from)
-                .find(|candidate| candidate.is_file())
+            None
         })
         .as_deref()
 }

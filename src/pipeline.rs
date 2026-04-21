@@ -14,6 +14,7 @@ use crate::cluster;
 use crate::classify;
 use crate::blast;
 use crate::output;
+use crate::prodigal_rs;
 
 #[derive(Clone, Copy)]
 struct BorderlineCandidate {
@@ -147,7 +148,7 @@ fn process_locus_hits(
     unmatched_cds: &[&Cds],
     protein_hashes_by_idx: &FxHashMap<usize, SeqHash>,
     cds_indices_by_protein_hash: &FxHashMap<SeqHash, Vec<usize>>,
-    hash_to_genomes: &FxHashMap<SeqHash, Vec<(GenomeIdx, String)>>,
+    hash_to_genomes: &FxHashMap<SeqHash, Vec<dedup::CdsGenomeEntry>>,
     all_results: &mut [Vec<LocusResult>],
     next_allele_id: &mut [AlleleId],
     novel_alleles: &mut Vec<(String, Vec<u8>)>,
@@ -178,7 +179,10 @@ fn process_locus_hits(
                 cds_item.dna_seq.iter().map(|b| b.to_ascii_uppercase()).collect();
             let dna_hash = schema::sha256(&dna_upper);
 
-            let class = if seen_dna.contains_key(&dna_hash) {
+            // Compute base class WITHOUT position classification —
+            // PLOT3/PLOT5/LOTSC depend on per-genome contig coordinates
+            // and will be checked per-genome below.
+            let base_class = if seen_dna.contains_key(&dna_hash) {
                 Classification::EXC
             } else if seen_prot.contains(&protein_hash) {
                 Classification::INF
@@ -189,7 +193,7 @@ fn process_locus_hits(
                     cds_item.dna_seq.len() as u32,
                     schema.loci[locus_idx].mode_length,
                     config.size_threshold,
-                    cds_item.coord.as_ref(),
+                    None, // coord=None: skip position classification here
                     hit.rep_dna_len,
                     hit.target_start,
                     hit.target_end,
@@ -198,7 +202,7 @@ fn process_locus_hits(
                 )
             };
 
-            if class == Classification::LNF {
+            if base_class == Classification::LNF {
                 continue;
             }
 
@@ -206,14 +210,40 @@ fn process_locus_hits(
                 continue;
             };
             let mut sorted_genomes: Vec<_> = genomes.iter().collect();
-            sorted_genomes.sort_by_key(|(gi, _)| *gi);
+            sorted_genomes.sort_by_key(|(gi, _, _)| *gi);
 
             let mut allele_id = seen_dna.get(&dna_hash).copied();
 
-            for (genome_pos, &&(genome_idx, _)) in sorted_genomes.iter().enumerate() {
+            for (genome_pos, (genome_idx, _, genome_coord)) in sorted_genomes.iter().enumerate() {
+                let genome_idx = *genome_idx;
+                // Apply per-genome position classification (PLOT3/PLOT5/LOTSC)
+                let class = if !config.cds_input && matches!(base_class, Classification::INF | Classification::ASM | Classification::ALM) {
+                    // Only INF/ASM/ALM can be reclassified to PLOT — EXC stays EXC
+                    if let Some(coord) = genome_coord.as_ref() {
+                        classify::position_classification_pub(
+                            coord,
+                            hit.rep_dna_len,
+                            hit.target_start,
+                            hit.target_end,
+                            hit.target_len,
+                        ).unwrap_or(base_class)
+                    } else {
+                        base_class
+                    }
+                } else {
+                    base_class
+                };
                 let gi = genome_idx as usize;
                 if gi >= all_results.len() || locus_idx >= all_results[gi].len() {
                     continue;
+                }
+                let debug_li = std::env::var("DEBUG_LOCUS").ok().and_then(|s| s.parse::<usize>().ok());
+                if debug_li == Some(locus_idx) && gi == 0 {
+                    let prev = all_results[gi][locus_idx].class;
+                    let cds_id = &cds_item.id;
+                    let cds_len = cds_item.dna_seq.len();
+                    eprintln!("  [DEBUG Phase4/5] genome={} locus={}: {} + {:?} (bsr={:.3}, cds_idx={}, related_cds_idx={}, cds_id={}, len={}, hash0={:02x}{:02x})",
+                        gi, locus_idx, prev, class, hit.best_bsr, hit.cds_idx, related_cds_idx, cds_id, cds_len, dna_hash[0], dna_hash[1]);
                 }
                 if only_fill_lnf && all_results[gi][locus_idx].class != Classification::LNF {
                     continue;
@@ -285,13 +315,13 @@ fn process_locus_hits(
                 }
             }
 
-            if class == Classification::INF {
+            if base_class == Classification::INF {
                 if let Some(aid) = allele_id {
                     seen_dna.insert(dna_hash, aid);
                 }
                 seen_prot.insert(protein_hash);
             }
-            if class != Classification::EXC {
+            if base_class != Classification::EXC {
                 excluded_cds.insert(related_cds_idx);
             } else if seen_dna.contains_key(&dna_hash) {
                 excluded_cds.insert(related_cds_idx);
@@ -485,6 +515,29 @@ pub fn run_allele_call(
         eprintln!("  Using training file: {}", trn.display());
     }
 
+    // Load Rust prodigal training data (used by default when training file exists)
+    // If PRODIGAL_SUBPROCESS env var is set, force C prodigal subprocess
+    let force_subprocess = std::env::var("PRODIGAL_SUBPROCESS").is_ok();
+    let rs_training: Option<prodigal_rs::Training> = if force_subprocess || config.use_prodigal_ffi {
+        if force_subprocess {
+            eprintln!("  PRODIGAL_SUBPROCESS set: using C prodigal subprocess");
+        }
+        None
+    } else {
+        training_file.as_ref().and_then(|trn| {
+            match prodigal_rs::Training::from_file(trn) {
+                Ok(t) => {
+                    eprintln!("  Using built-in Rust prodigal (no subprocess)");
+                    Some(t)
+                }
+                Err(e) => {
+                    eprintln!("  Warning: failed to load training for Rust prodigal: {}", e);
+                    None
+                }
+            }
+        })
+    };
+
     // Compute (or load cached) self-scores for representatives
     let cache_path = schema_dir.join("short").join("self_scores_rs.tsv");
     let cached = load_self_scores_cache(&cache_path, &schema.representatives);
@@ -597,15 +650,35 @@ pub fn run_allele_call(
                 }
             }
 
-            // Otherwise, run prodigal
-            let (mut cds_list, invalid) = cds::predict_cds(
-                genome_path,
-                genome_idx as GenomeIdx,
-                config.translation_table,
-                &config.prodigal_mode,
-                training_file.as_deref(),
-                &config.prodigal_path,
-            );
+            // Otherwise, run prodigal (Rust built-in, FFI, or subprocess)
+            let (mut cds_list, invalid) = if let Some(ref trn) = rs_training {
+                // Fastest: pure Rust prodigal (no subprocess, no FFI)
+                cds::predict_cds_rs(
+                    genome_path,
+                    genome_idx as GenomeIdx,
+                    trn,
+                )
+            } else if config.use_prodigal_ffi {
+                if let Some(ref trn) = training_file {
+                    cds::predict_cds_ffi(
+                        genome_path,
+                        genome_idx as GenomeIdx,
+                        config.translation_table,
+                        trn,
+                    )
+                } else {
+                    panic!("--prodigal-ffi requires a training file (.trn) in the schema directory");
+                }
+            } else {
+                cds::predict_cds(
+                    genome_path,
+                    genome_idx as GenomeIdx,
+                    config.translation_table,
+                    &config.prodigal_mode,
+                    training_file.as_deref(),
+                    &config.prodigal_path,
+                )
+            };
 
             // Fill contig lengths
             let contig_lengths = cds::get_contig_lengths(genome_path);
@@ -661,10 +734,16 @@ pub fn run_allele_call(
                 cds_classifications.insert(hash, (locus_idx, Classification::EXC, Some(allele_id)));
                 // Apply to all genomes with this hash
                 if let Some(genomes) = hash_to_genomes.get(&hash) {
-                    for &(genome_idx, _) in genomes {
-                        let gi = genome_idx as usize;
+                    for (genome_idx, _, _) in genomes {
+                        let gi = *genome_idx as usize;
                         let li = locus_idx as usize;
                         if gi < all_results.len() && li < num_loci {
+                            let debug_li = std::env::var("DEBUG_LOCUS").ok().and_then(|s| s.parse::<usize>().ok());
+                            if debug_li == Some(li) && gi == 0 {
+                                let prev = all_results[gi][li].class;
+                                eprintln!("  [DEBUG Phase3a] genome={} locus={}: {} + EXC(allele={}) hash={:?}",
+                                    gi, li, prev, allele_id, &hash[..4]);
+                            }
                             merge_result(
                                 &mut all_results[gi][li],
                                 Classification::EXC,
@@ -713,12 +792,18 @@ pub fn run_allele_call(
                 if let Some(genomes) = hash_to_genomes.get(&dna_hash) {
                     // Sort genomes to process in order (first gets INF, rest get EXC)
                     let mut sorted_genomes: Vec<_> = genomes.iter().collect();
-                    sorted_genomes.sort_by_key(|(gi, _)| *gi);
+                    sorted_genomes.sort_by_key(|(gi, _, _)| *gi);
 
                     let mut inf_allele_id: Option<AlleleId> = None;
-                    for &&(genome_idx, _) in &sorted_genomes {
-                        let gi = genome_idx as usize;
+                    for (genome_idx, _, _) in sorted_genomes.iter() {
+                        let gi = *genome_idx as usize;
                         if gi < all_results.len() && li < num_loci {
+                            let debug_li = std::env::var("DEBUG_LOCUS").ok().and_then(|s| s.parse::<usize>().ok());
+                            if debug_li == Some(li) && gi == 0 {
+                                let prev = all_results[gi][li].class;
+                                eprintln!("  [DEBUG Phase3c] genome={} locus={}: {} + protein_match (inf_allele={:?})",
+                                    gi, li, prev, inf_allele_id);
+                            }
                             let aid = if let Some(aid) = inf_allele_id {
                                 merge_result(
                                     &mut all_results[gi][li],
@@ -770,8 +855,8 @@ pub fn run_allele_call(
     let t4 = std::time::Instant::now(); eprintln!("  [TIMING] Phases 3a-c: {:.1}s", t4.duration_since(t3a).as_secs_f64());
     let mode_label = if config.use_gpu { " (GPU)" } else { "" };
     eprintln!("[Phase 4] Clustering + alignment{}...", mode_label);
-    let k = 5;
-    let w = 5;
+    let k = config.minimizer_k;
+    let w = config.minimizer_w;
     let min_shared = 1;
 
     let proteins_by_idx: FxHashMap<usize, Vec<u8>> = unmatched_proteins

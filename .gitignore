@@ -2,3 +2,4 @@
 beone_benchmark*/
 *.pyc
 __pycache__/
+paper/

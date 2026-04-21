@@ -6,14 +6,17 @@ use rustc_hash::FxHashMap;
 use crate::types::*;
 use crate::schema::sha256;
 
+/// Per-genome info stored alongside each CDS occurrence in hash_to_genomes.
+pub type CdsGenomeEntry = (GenomeIdx, String, Option<CdsCoord>);
+
 /// Deduplicate a list of CDSs by DNA sequence hash.
 /// Returns:
 /// - distinct_cds: one CDS per unique sequence (the representative)
-/// - hash_to_genomes: mapping from DNA hash → list of (genome_idx, cds_id)
+/// - hash_to_genomes: mapping from DNA hash → list of (genome_idx, cds_id, coord)
 /// - all_hashes: pre-computed SHA-256 hash for each CDS (parallel)
 pub fn deduplicate_cds(
     all_cds: &[Cds],
-) -> (Vec<&Cds>, FxHashMap<SeqHash, Vec<(GenomeIdx, String)>>, Vec<SeqHash>) {
+) -> (Vec<&Cds>, FxHashMap<SeqHash, Vec<CdsGenomeEntry>>, Vec<SeqHash>) {
     // Step 1: Compute hashes in parallel
     let all_hashes: Vec<SeqHash> = all_cds
         .par_iter()
@@ -24,7 +27,7 @@ pub fn deduplicate_cds(
         .collect();
 
     // Step 2: Build maps sequentially (HashMap is not thread-safe)
-    let mut hash_to_genomes: FxHashMap<SeqHash, Vec<(GenomeIdx, String)>> = FxHashMap::default();
+    let mut hash_to_genomes: FxHashMap<SeqHash, Vec<CdsGenomeEntry>> = FxHashMap::default();
     let mut seen: FxHashMap<SeqHash, usize> = FxHashMap::default();
     let mut distinct_cds: Vec<&Cds> = Vec::new();
 
@@ -34,7 +37,7 @@ pub fn deduplicate_cds(
         hash_to_genomes
             .entry(hash)
             .or_default()
-            .push((cds.genome_idx, cds.id.clone()));
+            .push((cds.genome_idx, cds.id.clone(), cds.coord.clone()));
 
         if !seen.contains_key(&hash) {
             seen.insert(hash, distinct_cds.len());
