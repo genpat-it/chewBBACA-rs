@@ -26,10 +26,14 @@ cmake .. && make -j$(nproc)
 cd ../..
 
 # Standard build
-RUSTFLAGS="-C target-cpu=native" cargo build --release
+cargo build --release
+
+# Optional: enable host-specific SIMD codegen for a small additional speedup
+# (≤4% on the BeONE benchmarks; the published timings use the standard build above)
+# RUSTFLAGS="-C target-cpu=native" cargo build --release
 
 # With GPU support (requires CUDA)
-CUDA_HOME=/usr/local/cuda RUSTFLAGS="-C target-cpu=native" cargo build --release
+CUDA_HOME=/usr/local/cuda cargo build --release
 
 # Run (parasail must be in LD_LIBRARY_PATH)
 LD_LIBRARY_PATH=/path/to/parasail/build ./target/release/chewcall [OPTIONS]

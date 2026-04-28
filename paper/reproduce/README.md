@@ -21,6 +21,7 @@ paper/reproduce/
 ├── 06_figure2_discordance_anatomy.py      ← Figure 2 (heat-map LaTeX block)
 ├── 07_supp_S3_classification_transitions.py  ← Supplementary Tables S3 + S4
 ├── 08_supp_S2_pyrodigal_equivalence.py    ← Supplementary Section S2 paragraph
+├── 09_table_cgmlst_split.py               ← Table 5 (cgMLST/wgMLST actionable split)
 └── README.md                              ← this file
 ```
 
@@ -51,9 +52,9 @@ Tools required on `PATH`:
 | **Table 3** (`tab:runtime_e2e`) — end-to-end runtime | Results §Performance | `python 04_tables_runtime_concordance.py --mode e2e` |
 | **Table 4** (`tab:concordance_e2e`) — end-to-end CRC32 | Results §Performance | `python 04_tables_runtime_concordance.py --mode e2e` |
 | **Figure 2** (`fig:discordance_anatomy`) — discordance heat-map | Results §Analysis of differences | `python 06_figure2_discordance_anatomy.py` |
-| **Table 5** (`tab:cgmlst_split`) — cgMLST/wgMLST actionable split | Results §Analysis of differences | `python 07_supp_S3_classification_transitions.py` (S4 block, summed cg/wg) |
+| **Table 5** (`tab:cgmlst_split`) — cgMLST/wgMLST actionable split | Results §Analysis of differences | `python 09_table_cgmlst_split.py` |
 | **Table 7** (`tab:clustering`) — cgMLST pairwise clustering | Results §Downstream concordance | `python 05_table_clustering.py` |
-| **Table 8** (`tab:outbreak`) — FDA outbreak reconstruction | Results §Downstream concordance | (manual; `03_run_FDA_outbreak.sh` produces the inputs) |
+| **Table 8** (`tab:outbreak`) — FDA outbreak reconstruction | Results §Downstream concordance | manual; inputs are produced by `03_run_FDA_outbreak.sh`, downstream MST / single-linkage clustering uses SciPy `minimum_spanning_tree` and `linkage`/`fcluster` (Implementation §iii) |
 | **Suppl Section S2** — pyrodigal equivalence | Supplementary | `python 08_supp_S2_pyrodigal_equivalence.py --genome ...` |
 | **Suppl Section S2** — concordance with v3.3.10 | Supplementary | derived from `04_tables_runtime_concordance.py` (vs 3.3.10 columns) |
 | **Suppl Table S3** (`tab-S3`) — classification transitions | Supplementary | `python 07_supp_S3_classification_transitions.py` (S3 block) |

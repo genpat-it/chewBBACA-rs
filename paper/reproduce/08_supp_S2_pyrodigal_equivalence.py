@@ -16,20 +16,6 @@ import argparse, hashlib, sys
 import pyrodigal
 
 
-def predict(version_callable, fasta_path: str):
-    seq = ""
-    with open(fasta_path) as f:
-        for line in f:
-            if line.startswith(">"): continue
-            seq += line.strip()
-    orf_finder = version_callable
-    cdss = list(orf_finder.find_genes(seq.encode()))
-    h = hashlib.md5()
-    for g in cdss:
-        h.update(g.sequence().encode())
-    return len(cdss), h.hexdigest()[:16]
-
-
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--genome", action="append", default=[], required=True,
