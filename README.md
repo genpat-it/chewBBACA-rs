@@ -25,6 +25,9 @@ cd parasail && mkdir build && cd build
 cmake .. && make -j$(nproc)
 cd ../..
 
+# Pin a tagged release for reproducibility (recommended for paper benchmarks)
+git checkout v0.1.0   # or any release tag; matches Cargo.lock under that tag
+
 # Standard build
 cargo build --release
 
