@@ -2,4 +2,42 @@
 beone_benchmark*/
 *.pyc
 __pycache__/
-paper/
+
+# ----- Paper directory ---------------------------------------------
+# Only scripts that reproduce the paper artefacts are committed.
+# Manuscript sources, generated figures and notes are local-only.
+
+# Paper-root sources & generated artefacts
+paper/*.tex
+paper/*.bib
+paper/*.pdf
+paper/*.md
+paper/*.txt
+paper/*.aux
+paper/*.log
+paper/*.out
+paper/*.toc
+paper/*.bbl
+paper/*.blg
+paper/*.fls
+paper/*.fdb_latexmk
+paper/*.synctex.gz
+paper/*.brf
+paper/*.nav
+paper/*.snm
+paper/*.bak
+paper/*.bak2
+paper/EFSA*
+paper/chewbbacca_paper/
+
+# Figures: keep only the Python generators; drop TikZ/PDFs/PNGs
+paper/figures/*.tex
+paper/figures/*.pdf
+paper/figures/*.png
+paper/figures/*.aux
+paper/figures/*.log
+paper/figures/__pycache__/
+
+# Re-allow the reproduce/ README which is part of the public repro toolkit
+!paper/reproduce/README.md
+!paper/benchmark_scripts/README.md
