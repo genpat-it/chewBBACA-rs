@@ -108,6 +108,28 @@ Runtime / output:
                                       and writes novel alleles only to the output dir.
 ```
 
+### Auditing a schema before a run (`tune_minimizer`)
+
+A separate binary `tune_minimizer` audits a schema against the minimizer pre-filter
+parameters and reports loci where the worst-case minimizer-Jaccard between an
+allele and its best-matching `short/` representative falls below the chosen
+threshold (Kchooser-style — see ksnp4). Useful for detecting loci with
+under-sized representative sets that would silently turn into LNFs at allele
+calling time.
+
+```bash
+tune_minimizer --schema /path/to/schema --threshold 0.20 --exclude-inferred \
+    --out tune_report.tsv --cpu 8
+```
+
+The TSV lists every locus with `n_reps`, `n_alleles`, `worst_recall`, the
+identifier of the worst-recalled allele, and a `flagged` column. The summary on
+stderr suggests either lowering `--minimizer-threshold` for the next chewcall
+run or — preferably — expanding the representative set via
+`chewBBACA SchemaEvaluator` / `CreateSchema`. `--exclude-inferred` skips
+`*N`-prefixed alleles, which are by construction outliers and rarely appear as
+actual query CDS.
+
 ### CDS prediction modes
 
 chewcall supports three CDS prediction modes:
