@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="logo.png" alt="chewcall" width="120">
+  <img src="logo.png" alt="chewcall" width="420">
 </p>
 
 # chewcall
