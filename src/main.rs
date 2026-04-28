@@ -100,6 +100,10 @@ struct Cli {
     /// Minimizer window size for pre-filtering (default: 5)
     #[arg(long, default_value = "5")]
     minimizer_w: usize,
+
+    /// Minimum shared minimizer fraction for candidate selection (default: 0.2 = 20%)
+    #[arg(long, default_value = "0.2")]
+    minimizer_threshold: f64,
 }
 
 fn main() {
@@ -139,6 +143,7 @@ fn main() {
         update_schema: cli.update_schema,
         minimizer_k: cli.minimizer_k,
         minimizer_w: cli.minimizer_w,
+        minimizer_threshold: cli.minimizer_threshold,
         use_prodigal_ffi: cli.prodigal_ffi,
     };
 

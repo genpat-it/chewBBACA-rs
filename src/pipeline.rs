@@ -120,8 +120,13 @@ fn register_novel_allele(
         .entry(dna_hash)
         .or_default()
         .push((locus_idx as u32, inf_id));
-    // Do NOT add novel alleles to inferred_allele_ids — Python only marks
-    // alleles with '*' prefix for Chewie-NS schemas, not for locally-inferred ones.
+    // Mark this runtime-inferred allele so the output writer prefixes it with '*'.
+    // chewBBACA prefixes runtime-inferred allele IDs with '*' too; without this, EXC
+    // matches against a runtime-inferred ID write a plain integer, which downstream
+    // tools (and the discordance comparator) misclassify as a schema-original EXC
+    // versus chewBBACA's INF '*N'. The classification stays EXC, so paralog
+    // detection (multi-EXC → NIPHEM) is unaffected.
+    schema.inferred_allele_ids.insert((locus_idx as u32, inf_id));
 
     inf_id
 }
@@ -728,7 +733,10 @@ pub fn run_allele_call(
         let hash = schema::sha256(&upper);
 
         if let Some(matches) = schema.dna_hashes.get(&hash) {
-            // Exact DNA match → EXC (may match multiple loci)
+            // Exact DNA match → EXC. Whether the allele was inferred (*-prefixed in schema
+            // or runtime-inferred during this run) is encoded at write time via the
+            // inferred_allele_ids set, not via the classification, so paralog detection
+            // (multi-EXC → NIPHEM) keeps working.
             dna_exact_count += 1;
             for &(locus_idx, allele_id) in matches {
                 cds_classifications.insert(hash, (locus_idx, Classification::EXC, Some(allele_id)));

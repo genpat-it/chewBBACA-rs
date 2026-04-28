@@ -162,6 +162,7 @@ pub struct Config {
     pub update_schema: bool,       // append novel alleles to schema FASTA files
     pub minimizer_k: usize,        // minimizer k-mer size (default 5)
     pub minimizer_w: usize,        // minimizer window size (default 5)
+    pub minimizer_threshold: f64,  // minimum shared minimizer fraction (default 0.2)
     pub use_prodigal_ffi: bool,    // use libprodigal FFI instead of subprocess
 }
 
@@ -182,6 +183,7 @@ impl Default for Config {
             update_schema: false,
             minimizer_k: 5,
             minimizer_w: 5,
+            minimizer_threshold: 0.2,
             use_prodigal_ffi: false,
         }
     }
