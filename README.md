@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="logo.svg" alt="chewcall" width="120">
+  <img src="logo.png" alt="chewcall" width="120">
 </p>
 
 # chewcall
@@ -68,21 +68,44 @@ chewcall \
 ```
 chewcall [OPTIONS] -i <INPUT> -g <SCHEMA> -o <OUTPUT>
 
-Options:
-  -i, --input <INPUT>           Input directory with genome FASTA files
-  -g, --schema <SCHEMA>         Schema directory (chewBBACA format)
-  -o, --output <OUTPUT>         Output directory
-      --cpu <CPU>               Number of CPU threads [default: 1]
-      --cds-input <CDS_INPUT>   Pre-computed CDS directory (skip built-in prediction)
-      --mode <MODE>             Alignment mode: "fast" (parasail) or "compatible" (BLAST) [default: fast]
-      --blastp-path <PATH>      Path to blastp binary (required for --mode compatible)
-      --gpu                     Use GPU (CUDA) for Smith-Waterman alignment
-      --update-schema           Append novel alleles (INF) to schema FASTA files in place
-      --bsr <BSR>               BLAST Score Ratio threshold [default: 0.6]
-      --size-threshold <SIZE>   Size threshold for ASM/ALM [default: 0.2]
-      --min-length <MIN>        Minimum sequence length [default: 0]
-  -t, --translation-table <TT>  Genetic code [default: 11]
-      --prodigal-mode <MODE>    Prodigal mode: single or meta [default: single]
+Required:
+  -i, --input <INPUT>                 Input directory with genome FASTA files
+  -g, --schema <SCHEMA>               Schema directory (chewBBACA format)
+  -o, --output <OUTPUT>               Output directory
+
+Calling parameters:
+      --bsr <BSR>                     BLAST Score Ratio threshold [default: 0.6]
+      --size-threshold <SIZE>         Size threshold for ASM/ALM classification [default: 0.2]
+      --min-length <MIN>              Minimum sequence length in bp [default: 0]
+  -t, --translation-table <TT>        Genetic code [default: 11]
+
+Minimizer pre-filter (Phase 4 candidate selection):
+      --minimizer-k <K>               Minimizer k-mer size [default: 5]
+      --minimizer-w <W>               Minimizer window size [default: 5]
+      --minimizer-threshold <FRAC>    Minimum shared-minimizer fraction [default: 0.2]
+                                      Lower this on schemas with high allelic
+                                      diversity if some loci appear under-represented
+                                      in the short/ subdirectory.
+
+Alignment backend:
+      --mode <MODE>                   Alignment mode: "fast" (parasail SIMD) or
+                                      "compatible" (BLASTp subprocess) [default: fast]
+      --blastp-path <PATH>            Path to blastp binary (required for --mode compatible)
+      --gpu                           Use GPU (CUDA) for Smith-Waterman alignment
+
+CDS prediction:
+      --cds-input <CDS_INPUT>         Directory with pre-computed CDS FASTA files
+                                      (from predict_cds.py); skips built-in prodigal-rs
+      --prodigal-path <PATH>          Path to prodigal binary (subprocess fallback)
+      --prodigal-ffi                  Use the bundled libprodigal FFI instead of a
+                                      subprocess (faster startup, requires training file)
+      --prodigal-mode <MODE>          Prodigal mode: single | meta [default: single]
+
+Runtime / output:
+      --cpu <CPU>                     Number of CPU threads [default: 1]
+      --update-schema                 Append novel alleles (INF) to the schema FASTA
+                                      files in place. By default chewcall is read-only
+                                      and writes novel alleles only to the output dir.
 ```
 
 ### CDS prediction modes
