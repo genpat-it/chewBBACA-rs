@@ -211,21 +211,15 @@ The `schema_audit` binary characterises the loci on which step (1) is
 structurally insufficient on the schema's own alleles, offline and once per
 (schema, $(k, w, \tau)$).
 
-See the paper (citation below) for the algorithmic formalisation, the
-soundness/completeness lemma for the at-risk set $V_\tau$, and the
-compositional correctness boundary theorem connecting filter retention to
-pipeline equivalence against a brute-force exact-SW baseline.
+The algorithmic formalisation — including the soundness/completeness lemma
+for the at-risk set $V_\tau$ and the compositional correctness boundary
+theorem connecting filter retention to pipeline equivalence against a
+brute-force exact-SW baseline — is described in a companion manuscript;
+citation details will be added upon publication.
 
-## Paper
-
-If you use chewcall or the schema-side audit in your work, please cite:
-
-> A. de Ruvo, N. Radomski, A. Di Pasquale.
-> **A schema-side audit of representative-based minimizer filtering in cgMLST/wgMLST allele calling.**
-> WABI 2026 (submitted).
-
-Companion reproduction scripts for the paper benchmarks are not part of this
-public release; they are available on request from the authors.
+Companion reproduction scripts for the benchmarks referenced in the
+manuscript are not part of this public release; they are available on
+request from the authors.
 
 ## License
 
