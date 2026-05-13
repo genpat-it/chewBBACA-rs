@@ -920,7 +920,7 @@ pub fn run_allele_call(
     } else {
         cluster::build_minimizer_index(&schema.representatives, k, w)
     };
-    let phase4_similarity = 0.20;
+    let phase4_similarity = config.minimizer_threshold;
     let phase4_threshold = config.bsr_threshold + 0.1;
 
     // Build self_scores map for BLAST functions

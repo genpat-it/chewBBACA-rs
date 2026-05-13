@@ -1,8 +1,9 @@
-//! tune_minimizer — Kchooser-style helper for the chewcall minimizer pre-filter.
+//! schema_audit — worst-case minimizer-overlap audit for chewcall's pre-filter.
 //!
-//! For each locus in a chewBBACA schema, scans every allele in the full locus
-//! FASTA and asks: at the given (k, w), what is the maximum minimizer-Jaccard
-//! between this allele and any representative in `short/`?
+//! Reference implementation of Algorithm 2 (SchemaAudit) of the paper. For each
+//! locus in a chewBBACA schema, scans every allele in the full locus FASTA and
+//! asks: at the given (k, w), what is the maximum minimizer-overlap (MO,
+//! query-normalised) between this allele and any representative in `short/`?
 //!
 //! The locus-level statistic is then `min over alleles of max over reps`, i.e.
 //! the worst-case recall the minimizer pre-filter offers on this locus when a
@@ -13,7 +14,7 @@
 //! `chewcall --minimizer-threshold ...`.
 //!
 //! Example:
-//!     chewcall-tune-minimizer --schema /path/to/schema --k 5 --w 5 --threshold 0.20
+//!     chewcall-schema-audit --schema /path/to/schema --k 5 --w 5 --threshold 0.20
 
 use clap::Parser;
 use rayon::prelude::*;
@@ -23,8 +24,8 @@ use std::path::PathBuf;
 use chewcall::translate;
 
 #[derive(Parser, Debug)]
-#[command(name = "chewcall-tune-minimizer", version)]
-#[command(about = "Kchooser-style audit of chewcall's minimizer pre-filter on a schema")]
+#[command(name = "chewcall-schema-audit", version)]
+#[command(about = "Schema-side audit of chewcall's minimizer-overlap pre-filter (computes per-locus wcr)")]
 struct Cli {
     /// Schema directory (chewBBACA layout: locus FASTA files + short/ subdir)
     #[arg(short = 'g', long)]
@@ -42,7 +43,7 @@ struct Cli {
     #[arg(long, default_value = "5")]
     w: usize,
 
-    /// Threshold to compare against; loci whose worst-case min-Jaccard falls
+    /// Threshold to compare against; loci whose worst-case minimizer-overlap falls
     /// below this are flagged.
     #[arg(long, default_value = "0.20")]
     threshold: f64,
@@ -139,16 +140,17 @@ fn read_proteins(path: &std::path::Path, table: u8) -> Vec<(String, Vec<u8>)> {
     out
 }
 
-fn jaccard(a: &FxHashSet<u64>, b: &FxHashSet<u64>) -> f64 {
-    if a.is_empty() && b.is_empty() {
-        return 1.0;
-    }
-    let inter = a.intersection(b).count();
-    let union = a.len() + b.len() - inter;
-    if union == 0 {
-        1.0
+/// Query-normalised minimizer containment J_M(p, r) = |M(p) ∩ M(r)| / |M(p)|.
+/// Asymmetric: |M(p)| is the query's minimizer set size, used to align with the
+/// paper's `J_M` definition and with the runtime filter operator in cluster.rs.
+/// When the query has no minimizers (short proteins), J_M is defined as 0 by
+/// convention, so such queries are never retained by the filter.
+fn j_m(a: &FxHashSet<u64>, b: &FxHashSet<u64>) -> f64 {
+    if a.is_empty() {
+        0.0
     } else {
-        inter as f64 / union as f64
+        let inter = a.intersection(b).count();
+        inter as f64 / a.len() as f64
     }
 }
 
@@ -238,7 +240,7 @@ fn main() {
                 let amins = minimizers(prot, cli.k, cli.w);
                 let best = rep_mins
                     .iter()
-                    .map(|rm| jaccard(&amins, rm))
+                    .map(|rm| j_m(&amins, rm))
                     .fold(0.0_f64, f64::max);
                 if best < worst {
                     worst = best;
