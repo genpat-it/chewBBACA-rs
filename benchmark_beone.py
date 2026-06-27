@@ -23,7 +23,7 @@ Usage:
     python benchmark_beone.py --rust-only
 
     # Use pre-downloaded data
-    python benchmark_beone.py --skip-download --data-dir /mnt/disk2/a.deruvo/beone_benchmarks/data
+    python benchmark_beone.py --skip-download --data-dir /path/to/beone/data
 """
 
 import argparse
@@ -629,7 +629,7 @@ def main():
         description="Benchmark chewbbacca-rs vs Python chewBBACA on BeONE datasets"
     )
     parser.add_argument("--data-dir",
-                        default="/mnt/disk2/a.deruvo/beone_benchmarks/data",
+                        default="beone_benchmarks/data",
                         help="Directory for downloaded data")
     parser.add_argument("--output-dir", default="./beone_benchmark",
                         help="Directory for benchmark outputs (default: ./beone_benchmark)")

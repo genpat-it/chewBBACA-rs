@@ -18,7 +18,7 @@ fn main() {
         .expect("Rust prodigal failed");
 
     let c_output = std::process::Command::new(
-        "/home/IZSNT/a.deruvo/miniconda3/envs/chewbbacca_gpu/bin/prodigal",
+        "prodigal",
     )
     .args(&[
         "-i",
