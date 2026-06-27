@@ -7,7 +7,9 @@ use crate::schema::sha256;
 use crate::types::*;
 
 /// Per-genome info stored alongside each CDS occurrence in hash_to_genomes.
-pub type CdsGenomeEntry = (GenomeIdx, String, Option<CdsCoord>);
+/// The CDS id is intentionally not stored: it is never read downstream, and
+/// dropping it saves one String allocation per CDS occurrence (millions).
+pub type CdsGenomeEntry = (GenomeIdx, Option<CdsCoord>);
 
 /// Deduplicate a list of CDSs by DNA sequence hash.
 /// Returns:
@@ -38,11 +40,10 @@ pub fn deduplicate_cds(
     for (i, cds) in all_cds.iter().enumerate() {
         let hash = all_hashes[i];
 
-        hash_to_genomes.entry(hash).or_default().push((
-            cds.genome_idx,
-            cds.id.clone(),
-            cds.coord.clone(),
-        ));
+        hash_to_genomes
+            .entry(hash)
+            .or_default()
+            .push((cds.genome_idx, cds.coord.clone()));
 
         if !seen.contains_key(&hash) {
             seen.insert(hash, distinct_cds.len());

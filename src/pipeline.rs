@@ -224,11 +224,11 @@ fn process_locus_hits(
                 continue;
             };
             let mut sorted_genomes: Vec<_> = genomes.iter().collect();
-            sorted_genomes.sort_by_key(|(gi, _, _)| *gi);
+            sorted_genomes.sort_by_key(|(gi, _)| *gi);
 
             let mut allele_id = seen_dna.get(&dna_hash).copied();
 
-            for (genome_pos, (genome_idx, _, genome_coord)) in sorted_genomes.iter().enumerate() {
+            for (genome_pos, (genome_idx, genome_coord)) in sorted_genomes.iter().enumerate() {
                 let genome_idx = *genome_idx;
                 // Apply per-genome position classification (PLOT3/PLOT5/LOTSC)
                 let class = if !config.cds_input
@@ -743,12 +743,10 @@ pub fn run_allele_call(
     // distinct CDS). The per-sequence length needed by the contig-info scan is
     // cached in `hash_to_len`.
     const GENOME_CHUNK: usize = 64;
-    let mut all_cds: Vec<Cds> = Vec::new();
-    let mut all_cds_hashes: Vec<SeqHash> = Vec::new();
+    let mut distinct_cds: Vec<Cds> = Vec::new();
     let mut hash_to_genomes: FxHashMap<SeqHash, Vec<dedup::CdsGenomeEntry>> = FxHashMap::default();
     let mut hash_to_len: FxHashMap<SeqHash, u32> = FxHashMap::default();
     let mut seen: FxHashSet<SeqHash> = FxHashSet::default();
-    let mut distinct_idx: Vec<usize> = Vec::new();
     let mut total_cds = 0usize;
     let mut gstart = 0usize;
     while gstart < genome_paths.len() {
@@ -769,22 +767,18 @@ pub fn run_allele_call(
                 schema::sha256(&upper)
             })
             .collect();
-        for (mut cds, hash) in chunk_cds.into_iter().zip(chunk_hashes) {
+        for (cds, hash) in chunk_cds.into_iter().zip(chunk_hashes) {
             total_cds += 1;
-            hash_to_genomes.entry(hash).or_default().push((
-                cds.genome_idx,
-                cds.id.clone(),
-                cds.coord.clone(),
-            ));
-            all_cds_hashes.push(hash);
-            if seen.contains(&hash) {
-                cds.dna_seq = Vec::new(); // free duplicate DNA; metadata retained
-            } else {
-                seen.insert(hash);
+            hash_to_genomes
+                .entry(hash)
+                .or_default()
+                .push((cds.genome_idx, cds.coord.clone()));
+            if seen.insert(hash) {
+                // first occurrence: keep the sequence as the distinct representative
                 hash_to_len.insert(hash, cds.dna_seq.len() as u32);
-                distinct_idx.push(all_cds.len());
+                distinct_cds.push(cds);
             }
-            all_cds.push(cds);
+            // duplicate occurrences are dropped; their metadata is in hash_to_genomes
         }
         gstart = gend;
     }
@@ -797,8 +791,7 @@ pub fn run_allele_call(
         t2.duration_since(t1).as_secs_f64()
     );
     eprintln!("[Phase 2] Deduplicating CDS...");
-    let distinct_cds: Vec<&Cds> = distinct_idx.iter().map(|&i| &all_cds[i]).collect();
-    eprintln!("  Distinct CDS: {} (from {})", distinct_cds.len(), all_cds.len());
+    eprintln!("  Distinct CDS: {} (from {})", distinct_cds.len(), total_cds);
 
     // Track classification per CDS hash → locus
     // We'll track per-genome, per-locus results through hash_to_genomes mapping.
@@ -833,7 +826,7 @@ pub fn run_allele_call(
                 cds_classifications.insert(hash, (locus_idx, Classification::EXC, Some(allele_id)));
                 // Apply to all genomes with this hash
                 if let Some(genomes) = hash_to_genomes.get(&hash) {
-                    for (genome_idx, _, _) in genomes {
+                    for (genome_idx, _) in genomes {
                         let gi = *genome_idx as usize;
                         let li = locus_idx as usize;
                         if gi < all_results.len() && li < num_loci {
@@ -897,10 +890,10 @@ pub fn run_allele_call(
                 if let Some(genomes) = hash_to_genomes.get(&dna_hash) {
                     // Sort genomes to process in order (first gets INF, rest get EXC)
                     let mut sorted_genomes: Vec<_> = genomes.iter().collect();
-                    sorted_genomes.sort_by_key(|(gi, _, _)| *gi);
+                    sorted_genomes.sort_by_key(|(gi, _)| *gi);
 
                     let mut inf_allele_id: Option<AlleleId> = None;
-                    for (genome_idx, _, _) in sorted_genomes.iter() {
+                    for (genome_idx, _) in sorted_genomes.iter() {
                         let gi = *genome_idx as usize;
                         if gi < all_results.len() && li < num_loci {
                             let debug_li = std::env::var("DEBUG_LOCUS")
@@ -1477,13 +1470,16 @@ pub fn run_allele_call(
     eprintln!("[Phase 6] Building contigs info...");
     // O(all_cds) scan: for each CDS, check if it was classified to a locus
     // Uses pre-computed hashes from Phase 2 (avoids re-hashing 4M+ sequences)
-    for (cds_i, cds_item) in all_cds.iter().enumerate() {
-        let hash = all_cds_hashes[cds_i];
-        if let Some(&(locus_idx, _, _)) = cds_classifications.get(&hash) {
-            let gi = cds_item.genome_idx as usize;
-            let li = locus_idx as usize;
+    for (hash, occurrences) in &hash_to_genomes {
+        let Some(&(locus_idx, _, _)) = cds_classifications.get(hash) else {
+            continue;
+        };
+        let li = locus_idx as usize;
+        let cds_length = hash_to_len.get(hash).copied().unwrap_or(0);
+        for (genome_idx, coord) in occurrences {
+            let gi = *genome_idx as usize;
             if gi < all_results.len() && li < num_loci && all_results[gi][li].class.is_valid() {
-                if let Some(ref coord) = cds_item.coord {
+                if let Some(coord) = coord {
                     contigs_info.push(output::ContigInfo {
                         genome: genome_paths[gi].clone(),
                         contig: coord.contig.clone(),
@@ -1491,7 +1487,7 @@ pub fn run_allele_call(
                         start: coord.start,
                         stop: coord.stop,
                         strand: coord.strand,
-                        cds_length: hash_to_len.get(&hash).copied().unwrap_or(0),
+                        cds_length,
                         class: all_results[gi][li].class,
                     });
                 }
