@@ -131,32 +131,26 @@ fn base_idx(b: u8) -> Option<usize> {
 //        GTT, GTC, GTA, GTG, GCT, GCC, GCA, GCG, GAT, GAC, GAA, GAG,
 //        GGT, GGC, GGA, GGG
 static GENETIC_CODE_11: [u8; 64] = [
-    b'F', b'F', b'L', b'L', b'S', b'S', b'S', b'S', b'Y', b'Y', b'*', b'*',
-    b'C', b'C', b'*', b'W', b'L', b'L', b'L', b'L', b'P', b'P', b'P', b'P',
-    b'H', b'H', b'Q', b'Q', b'R', b'R', b'R', b'R', b'I', b'I', b'I', b'M',
-    b'T', b'T', b'T', b'T', b'N', b'N', b'K', b'K', b'S', b'S', b'R', b'R',
-    b'V', b'V', b'V', b'V', b'A', b'A', b'A', b'A', b'D', b'D', b'E', b'E',
-    b'G', b'G', b'G', b'G',
+    b'F', b'F', b'L', b'L', b'S', b'S', b'S', b'S', b'Y', b'Y', b'*', b'*', b'C', b'C', b'*', b'W',
+    b'L', b'L', b'L', b'L', b'P', b'P', b'P', b'P', b'H', b'H', b'Q', b'Q', b'R', b'R', b'R', b'R',
+    b'I', b'I', b'I', b'M', b'T', b'T', b'T', b'T', b'N', b'N', b'K', b'K', b'S', b'S', b'R', b'R',
+    b'V', b'V', b'V', b'V', b'A', b'A', b'A', b'A', b'D', b'D', b'E', b'E', b'G', b'G', b'G', b'G',
 ];
 
 // Genetic code 1 (Standard)
 static GENETIC_CODE_1: [u8; 64] = [
-    b'F', b'F', b'L', b'L', b'S', b'S', b'S', b'S', b'Y', b'Y', b'*', b'*',
-    b'C', b'C', b'*', b'W', b'L', b'L', b'L', b'L', b'P', b'P', b'P', b'P',
-    b'H', b'H', b'Q', b'Q', b'R', b'R', b'R', b'R', b'I', b'I', b'I', b'M',
-    b'T', b'T', b'T', b'T', b'N', b'N', b'K', b'K', b'S', b'S', b'R', b'R',
-    b'V', b'V', b'V', b'V', b'A', b'A', b'A', b'A', b'D', b'D', b'E', b'E',
-    b'G', b'G', b'G', b'G',
+    b'F', b'F', b'L', b'L', b'S', b'S', b'S', b'S', b'Y', b'Y', b'*', b'*', b'C', b'C', b'*', b'W',
+    b'L', b'L', b'L', b'L', b'P', b'P', b'P', b'P', b'H', b'H', b'Q', b'Q', b'R', b'R', b'R', b'R',
+    b'I', b'I', b'I', b'M', b'T', b'T', b'T', b'T', b'N', b'N', b'K', b'K', b'S', b'S', b'R', b'R',
+    b'V', b'V', b'V', b'V', b'A', b'A', b'A', b'A', b'D', b'D', b'E', b'E', b'G', b'G', b'G', b'G',
 ];
 
 // Genetic code 4 (Mycoplasma/Spiroplasma)
 static GENETIC_CODE_4: [u8; 64] = [
-    b'F', b'F', b'L', b'L', b'S', b'S', b'S', b'S', b'Y', b'Y', b'*', b'*',
-    b'C', b'C', b'W', b'W', b'L', b'L', b'L', b'L', b'P', b'P', b'P', b'P',
-    b'H', b'H', b'Q', b'Q', b'R', b'R', b'R', b'R', b'I', b'I', b'I', b'M',
-    b'T', b'T', b'T', b'T', b'N', b'N', b'K', b'K', b'S', b'S', b'R', b'R',
-    b'V', b'V', b'V', b'V', b'A', b'A', b'A', b'A', b'D', b'D', b'E', b'E',
-    b'G', b'G', b'G', b'G',
+    b'F', b'F', b'L', b'L', b'S', b'S', b'S', b'S', b'Y', b'Y', b'*', b'*', b'C', b'C', b'W', b'W',
+    b'L', b'L', b'L', b'L', b'P', b'P', b'P', b'P', b'H', b'H', b'Q', b'Q', b'R', b'R', b'R', b'R',
+    b'I', b'I', b'I', b'M', b'T', b'T', b'T', b'T', b'N', b'N', b'K', b'K', b'S', b'S', b'R', b'R',
+    b'V', b'V', b'V', b'V', b'A', b'A', b'A', b'A', b'D', b'D', b'E', b'E', b'G', b'G', b'G', b'G',
 ];
 
 #[cfg(test)]

@@ -25,7 +25,9 @@ use chewcall::translate;
 
 #[derive(Parser, Debug)]
 #[command(name = "chewcall-schema-audit", version)]
-#[command(about = "Schema-side audit of chewcall's minimizer-overlap pre-filter (computes per-locus wcr)")]
+#[command(
+    about = "Schema-side audit of chewcall's minimizer-overlap pre-filter (computes per-locus wcr)"
+)]
 struct Cli {
     /// Schema directory (chewBBACA layout: locus FASTA files + short/ subdir)
     #[arg(short = 'g', long)]
@@ -76,7 +78,7 @@ struct LocusReport {
     n_alleles: usize,
     prot_min: usize,
     prot_max: usize,
-    /// min over alleles of (max over reps of Jaccard)
+    /// min over alleles of (max over reps of query-normalised minimizer containment / MO)
     worst_recall: f64,
     /// allele identifier exhibiting the worst recall (best-effort header parse)
     worst_allele: String,
@@ -110,7 +112,10 @@ fn minimizers(seq: &[u8], k: usize, w: usize) -> FxHashSet<u64> {
         return out;
     }
     for window_start in 0..=(kmer_hashes.len() - w) {
-        let m = *kmer_hashes[window_start..window_start + w].iter().min().unwrap();
+        let m = *kmer_hashes[window_start..window_start + w]
+            .iter()
+            .min()
+            .unwrap();
         out.insert(m);
     }
     out
@@ -219,7 +224,9 @@ fn main() {
             }
             if cli.exclude_inferred {
                 alleles.retain(|(id, _)| {
-                    id.rsplit('_').next().map_or(true, |suf| !suf.starts_with('*'))
+                    id.rsplit('_')
+                        .next()
+                        .map_or(true, |suf| !suf.starts_with('*'))
                 });
                 if alleles.is_empty() {
                     return None;
@@ -232,7 +239,7 @@ fn main() {
             let prot_min = alleles.iter().map(|(_, p)| p.len()).min().unwrap_or(0);
             let prot_max = alleles.iter().map(|(_, p)| p.len()).max().unwrap_or(0);
 
-            // For each allele, compute the best Jaccard against any rep; track
+            // For each allele, compute the best containment (MO) against any rep; track
             // the worst (allele, rep) pair so we can name the offending allele.
             let mut worst = 1.0_f64;
             let mut worst_id = String::new();
@@ -295,7 +302,10 @@ fn main() {
 
     // Summary on stderr
     let n_total = reports.len();
-    let n_flagged = reports.iter().filter(|r| r.worst_recall < cli.threshold).count();
+    let n_flagged = reports
+        .iter()
+        .filter(|r| r.worst_recall < cli.threshold)
+        .count();
     let global_min = reports
         .iter()
         .map(|r| r.worst_recall)
@@ -314,7 +324,7 @@ fn main() {
         cli.threshold, n_flagged
     );
     eprintln!(
-        "global worst recall (minimum allele-vs-best-rep Jaccard): {:.4}",
+        "global worst recall (minimum allele-vs-best-rep minimizer containment / MO): {:.4}",
         global_min
     );
     if n_flagged == 0 {

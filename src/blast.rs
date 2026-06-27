@@ -13,8 +13,8 @@ use std::sync::OnceLock;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::cluster::ClusterResult;
-use crate::types::Representative;
 use crate::sw;
+use crate::types::Representative;
 
 static BLASTP_PATH: OnceLock<Option<PathBuf>> = OnceLock::new();
 
@@ -80,8 +80,8 @@ pub fn validate_repdet_hits_parasail(
     representatives: &[Representative],
     bsr_threshold: f64,
 ) -> FxHashMap<usize, Vec<ClusterResult>> {
-    use rayon::prelude::*;
     use crate::parasail_ffi;
+    use rayon::prelude::*;
 
     // Pre-build locus → rep indices mapping
     let mut locus_reps: FxHashMap<u32, Vec<usize>> = FxHashMap::default();
@@ -89,9 +89,11 @@ pub fn validate_repdet_hits_parasail(
         locus_reps.entry(rep.locus_idx).or_default().push(ri);
     }
 
-    let loci: Vec<usize> = hits_by_locus.keys()
+    let loci: Vec<usize> = hits_by_locus
+        .keys()
         .filter(|&&locus| {
-            hits_by_locus.get(&locus)
+            hits_by_locus
+                .get(&locus)
                 .map(|hits| hits.iter().any(|h| h.best_bsr >= bsr_threshold))
                 .unwrap_or(false)
         })
@@ -101,50 +103,66 @@ pub fn validate_repdet_hits_parasail(
     loci.par_iter()
         .map(|&locus_idx| {
             let hits = &hits_by_locus[&locus_idx];
-            let rep_indices = locus_reps.get(&(locus_idx as u32)).cloned().unwrap_or_default();
+            let rep_indices = locus_reps
+                .get(&(locus_idx as u32))
+                .cloned()
+                .unwrap_or_default();
 
             let mut best_per_cds: FxHashMap<usize, ClusterResult> = FxHashMap::default();
 
             for hit in hits {
-                if hit.best_bsr < bsr_threshold { continue; }
-                let Some(protein) = proteins_by_idx.get(&hit.cds_idx) else { continue };
+                if hit.best_bsr < bsr_threshold {
+                    continue;
+                }
+                let Some(protein) = proteins_by_idx.get(&hit.cds_idx) else {
+                    continue;
+                };
 
                 for &rep_idx in &rep_indices {
                     let rep = &representatives[rep_idx];
-                    if rep.self_score <= 0.0 { continue; }
+                    if rep.self_score <= 0.0 {
+                        continue;
+                    }
 
                     let (score, _, _) = parasail_ffi::sw_simd(protein, &rep.protein_seq);
                     let bsr = score as f64 / rep.self_score;
-                    if bsr < bsr_threshold { continue; }
+                    if bsr < bsr_threshold {
+                        continue;
+                    }
 
                     let is_better = match best_per_cds.get(&hit.cds_idx) {
                         None => true,
-                        Some(e) => score > e.score
-                            || (score == e.score && rep_idx < e.representative_idx),
+                        Some(e) => {
+                            score > e.score || (score == e.score && rep_idx < e.representative_idx)
+                        }
                     };
                     if is_better {
                         let (_, _, _, target_start, target_end) =
                             parasail_ffi::sw_simd_full(protein, &rep.protein_seq);
-                        best_per_cds.insert(hit.cds_idx, ClusterResult {
-                            cds_idx: hit.cds_idx,
-                            representative_idx: rep_idx,
-                            best_locus: locus_idx as u32,
-                            best_bsr: bsr,
-                            score,
-                            rep_dna_len: rep.dna_length,
-                            query_start: 0,
-                            query_end: 0,
-                            query_len: protein.len() as u32,
-                            target_start,
-                            target_end,
-                            target_len: rep.protein_seq.len() as u32,
-                        });
+                        best_per_cds.insert(
+                            hit.cds_idx,
+                            ClusterResult {
+                                cds_idx: hit.cds_idx,
+                                representative_idx: rep_idx,
+                                best_locus: locus_idx as u32,
+                                best_bsr: bsr,
+                                score,
+                                rep_dna_len: rep.dna_length,
+                                query_start: 0,
+                                query_end: 0,
+                                query_len: protein.len() as u32,
+                                target_start,
+                                target_end,
+                                target_len: rep.protein_seq.len() as u32,
+                            },
+                        );
                     }
                 }
             }
 
             let mut validated: Vec<_> = best_per_cds.into_values().collect();
-            validated.sort_unstable_by(|a, b| b.score.cmp(&a.score).then(a.cds_idx.cmp(&b.cds_idx)));
+            validated
+                .sort_unstable_by(|a, b| b.score.cmp(&a.score).then(a.cds_idx.cmp(&b.cds_idx)));
             (locus_idx, validated)
         })
         .collect()
@@ -252,7 +270,10 @@ pub fn validate_locus_hits(
                 continue;
             }
 
-            let Some(rep_idx) = fields[0].strip_prefix("rep:").and_then(|s| s.parse::<usize>().ok()) else {
+            let Some(rep_idx) = fields[0]
+                .strip_prefix("rep:")
+                .and_then(|s| s.parse::<usize>().ok())
+            else {
                 continue;
             };
             let qstart = fields[1].parse::<u32>().ok();
@@ -294,8 +315,10 @@ pub fn validate_locus_hits(
             };
             let dominated = match best_raw_per_cds.get(&cds_idx) {
                 None => true,
-                Some(e) => candidate.score > e.score
-                    || (candidate.score == e.score && candidate.rep_idx < e.rep_idx),
+                Some(e) => {
+                    candidate.score > e.score
+                        || (candidate.score == e.score && candidate.rep_idx < e.rep_idx)
+                }
             };
             if dominated {
                 best_raw_per_cds.insert(cds_idx, candidate);
@@ -482,23 +505,31 @@ fn run_blastp(
 ) -> bool {
     let mut cmd = Command::new(blastp);
     cmd.args([
-        "-query", query.to_str().unwrap(),
-        "-subject", subject.to_str().unwrap(),
-        "-out", output.to_str().unwrap(),
-        "-outfmt", outfmt,
-        "-max_hsps", "1",
-        "-num_threads", &num_threads.to_string(),
-        "-evalue", "0.001",
-        "-comp_based_stats", "0",
+        "-query",
+        query.to_str().unwrap(),
+        "-subject",
+        subject.to_str().unwrap(),
+        "-out",
+        output.to_str().unwrap(),
+        "-outfmt",
+        outfmt,
+        "-max_hsps",
+        "1",
+        "-num_threads",
+        &num_threads.to_string(),
+        "-evalue",
+        "0.001",
+        "-comp_based_stats",
+        "0",
     ]);
     for arg in extra_args {
         cmd.arg(arg);
     }
     cmd.stdout(std::process::Stdio::null())
-       .stderr(std::process::Stdio::null())
-       .status()
-       .map(|s| s.success())
-       .unwrap_or(false)
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
 }
 
 /// Create a BLAST database from a FASTA file using makeblastdb.
@@ -507,10 +538,13 @@ fn make_blast_db(blastp: &Path, fasta: &Path, db_path: &Path, db_type: &str) -> 
     let makeblastdb = blastp.with_file_name("makeblastdb");
     Command::new(&makeblastdb)
         .args([
-            "-in", fasta.to_str().unwrap(),
-            "-out", db_path.to_str().unwrap(),
-            "-dbtype", db_type,
-            "-parse_seqids",  // Required for -seqidlist to work
+            "-in",
+            fasta.to_str().unwrap(),
+            "-out",
+            db_path.to_str().unwrap(),
+            "-dbtype",
+            db_type,
+            "-parse_seqids", // Required for -seqidlist to work
         ])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -543,21 +577,29 @@ fn run_blastp_db_ext(
 ) -> bool {
     let mut cmd = Command::new(blastp);
     cmd.args([
-        "-query", query.to_str().unwrap(),
-        "-db", db.to_str().unwrap(),
-        "-out", output.to_str().unwrap(),
-        "-outfmt", outfmt,
-        "-max_hsps", "1",
-        "-num_threads", &num_threads.to_string(),
-        "-evalue", evalue,
-        "-comp_based_stats", "0",
+        "-query",
+        query.to_str().unwrap(),
+        "-db",
+        db.to_str().unwrap(),
+        "-out",
+        output.to_str().unwrap(),
+        "-outfmt",
+        outfmt,
+        "-max_hsps",
+        "1",
+        "-num_threads",
+        &num_threads.to_string(),
+        "-evalue",
+        evalue,
+        "-comp_based_stats",
+        "0",
     ]);
     cmd.args(extra_args);
     cmd.stdout(std::process::Stdio::null())
-       .stderr(std::process::Stdio::null())
-       .status()
-       .map(|s| s.success())
-       .unwrap_or(false)
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
 }
 
 /// Compute BLAST self-scores for representative proteins.
@@ -579,7 +621,9 @@ pub fn blast_self_scores(
     let fasta_path = temp_dir.join("reps.faa");
     let output_path = temp_dir.join("self_blast.tsv");
     {
-        let records: Vec<_> = representatives.iter().enumerate()
+        let records: Vec<_> = representatives
+            .iter()
+            .enumerate()
             .map(|(i, rep)| (format!("rep:{i}"), rep.protein_seq.clone()))
             .collect();
         if write_fasta(&fasta_path, &records).is_err() {
@@ -591,12 +635,25 @@ pub fn blast_self_scores(
     // BLAST each rep against itself using -db mode (matching Python chewBBACA)
     let db_path = temp_dir.join("reps_db");
     let blast_ok = if make_blast_db(blastp, &fasta_path, &db_path, "prot") {
-        run_blastp_db(blastp, &fasta_path, &db_path, &output_path, num_threads,
-                      "6 qseqid qstart qend qlen sseqid slen score")
+        run_blastp_db(
+            blastp,
+            &fasta_path,
+            &db_path,
+            &output_path,
+            num_threads,
+            "6 qseqid qstart qend qlen sseqid slen score",
+        )
     } else {
         // Fallback to -subject mode
-        run_blastp(blastp, &fasta_path, &fasta_path, &output_path, num_threads,
-                   "6 qseqid qstart qend qlen sseqid slen score", &[])
+        run_blastp(
+            blastp,
+            &fasta_path,
+            &fasta_path,
+            &output_path,
+            num_threads,
+            "6 qseqid qstart qend qlen sseqid slen score",
+            &[],
+        )
     };
     if !blast_ok {
         let _ = fs::remove_dir_all(&temp_dir);
@@ -609,12 +666,22 @@ pub fn blast_self_scores(
         let reader = BufReader::new(file);
         for line in reader.lines().map_while(Result::ok) {
             let fields: Vec<_> = line.split('\t').collect();
-            if fields.len() < 7 { continue; }
+            if fields.len() < 7 {
+                continue;
+            }
             // Self-hit: qseqid == sseqid
-            if fields[0] != fields[4] { continue; }
-            let Some(rep_idx) = fields[0].strip_prefix("rep:")
-                .and_then(|s| s.parse::<usize>().ok()) else { continue };
-            let Some(score) = fields[6].parse::<f64>().ok() else { continue };
+            if fields[0] != fields[4] {
+                continue;
+            }
+            let Some(rep_idx) = fields[0]
+                .strip_prefix("rep:")
+                .and_then(|s| s.parse::<usize>().ok())
+            else {
+                continue;
+            };
+            let Some(score) = fields[6].parse::<f64>().ok() else {
+                continue;
+            };
             if score > 0.0 {
                 scores.insert(rep_idx, score);
             }
@@ -643,14 +710,22 @@ fn parasail_self_scores(representatives: &[Representative]) -> FxHashMap<usize, 
 /// - select_highest_scores: sort by score DESC, keep first hit per target (subject)
 /// - Returns one ClusterResult per matched protein (best rep per protein)
 pub fn blast_phase4(
-    proteins: &[(usize, Vec<u8>)],  // (cds_idx, protein)
+    proteins: &[(usize, Vec<u8>)], // (cds_idx, protein)
     representatives: &[Representative],
     self_scores: &FxHashMap<usize, f64>,
     bsr_threshold: f64,
     blastp_path: &str,
     num_threads: usize,
 ) -> Vec<ClusterResult> {
-    blast_phase4_impl(proteins, representatives, self_scores, bsr_threshold, blastp_path, num_threads, true)
+    blast_phase4_impl(
+        proteins,
+        representatives,
+        self_scores,
+        bsr_threshold,
+        blastp_path,
+        num_threads,
+        true,
+    )
 }
 
 /// Like blast_phase4 but returns ALL hits with BSR computed (no dedup, no BSR filter).
@@ -664,7 +739,15 @@ pub fn blast_phase4_raw(
     num_threads: usize,
 ) -> Vec<ClusterResult> {
     // No dedup, no BSR filter (threshold=0.0) — caller handles everything
-    blast_phase4_impl(proteins, representatives, self_scores, 0.0, blastp_path, num_threads, false)
+    blast_phase4_impl(
+        proteins,
+        representatives,
+        self_scores,
+        0.0,
+        blastp_path,
+        num_threads,
+        false,
+    )
 }
 
 fn blast_phase4_impl(
@@ -689,13 +772,16 @@ fn blast_phase4_impl(
 
     // Query: representatives (matching Python: rep is query)
     let query_path = temp_dir.join("query.faa");
-    let query_records: Vec<_> = representatives.iter().enumerate()
+    let query_records: Vec<_> = representatives
+        .iter()
+        .enumerate()
         .map(|(i, rep)| (format!("rep:{i}"), rep.protein_seq.clone()))
         .collect();
 
     // Subject: unclassified proteins (will become a BLAST DB)
     let subject_path = temp_dir.join("subject.faa");
-    let subject_records: Vec<_> = proteins.iter()
+    let subject_records: Vec<_> = proteins
+        .iter()
         .map(|(cds_idx, prot)| (format!("cds:{cds_idx}"), prot.clone()))
         .collect();
 
@@ -712,12 +798,25 @@ fn blast_phase4_impl(
     // Use -db mode (matching Python chewBBACA) for correct E-value computation.
     // Python creates a makeblastdb from CDS proteins and queries with representatives.
     let blast_ok = if make_blast_db(blastp, &subject_path, &db_path, "prot") {
-        run_blastp_db(blastp, &query_path, &db_path, &output_path, num_threads,
-                      "6 qseqid qstart qend qlen sseqid slen score")
+        run_blastp_db(
+            blastp,
+            &query_path,
+            &db_path,
+            &output_path,
+            num_threads,
+            "6 qseqid qstart qend qlen sseqid slen score",
+        )
     } else {
         eprintln!("  WARNING: makeblastdb failed, falling back to -subject mode");
-        run_blastp(blastp, &query_path, &subject_path, &output_path, num_threads,
-                   "6 qseqid qstart qend qlen sseqid slen score", &[])
+        run_blastp(
+            blastp,
+            &query_path,
+            &subject_path,
+            &output_path,
+            num_threads,
+            "6 qseqid qstart qend qlen sseqid slen score",
+            &[],
+        )
     };
 
     if !blast_ok {
@@ -726,10 +825,20 @@ fn blast_phase4_impl(
         return Vec::new();
     }
 
-    eprintln!("  BLAST Phase4: {} query reps, {} subject proteins", query_records.len(), subject_records.len());
+    eprintln!(
+        "  BLAST Phase4: {} query reps, {} subject proteins",
+        query_records.len(),
+        subject_records.len()
+    );
 
     // Parse BLAST results
-    let results = parse_blast_results(&output_path, representatives, self_scores, bsr_threshold, dedup_per_locus);
+    let results = parse_blast_results(
+        &output_path,
+        representatives,
+        self_scores,
+        bsr_threshold,
+        dedup_per_locus,
+    );
 
     // Keep temp dir if CHEWCALL_DEBUG_BLAST is set
     if std::env::var("CHEWCALL_DEBUG_BLAST").is_ok() {
@@ -751,7 +860,14 @@ pub fn blast_repdet(
     num_threads: usize,
 ) -> Vec<ClusterResult> {
     // Same as Phase 4 but with different threshold
-    blast_phase4(proteins, representatives, self_scores, bsr_threshold, blastp_path, num_threads)
+    blast_phase4(
+        proteins,
+        representatives,
+        self_scores,
+        bsr_threshold,
+        blastp_path,
+        num_threads,
+    )
 }
 
 /// Parse BLAST output and apply select_highest_scores logic PER LOCUS.
@@ -775,17 +891,37 @@ fn parse_blast_results(
         let reader = BufReader::new(file);
         for line in reader.lines().map_while(Result::ok) {
             let fields: Vec<_> = line.split('\t').collect();
-            if fields.len() < 7 { continue; }
+            if fields.len() < 7 {
+                continue;
+            }
 
-            let Some(rep_idx) = fields[0].strip_prefix("rep:")
-                .and_then(|s| s.parse::<usize>().ok()) else { continue };
-            let Some(cds_idx) = fields[4].strip_prefix("cds:")
-                .and_then(|s| s.parse::<usize>().ok()) else { continue };
-            let Some(qstart) = fields[1].parse::<u32>().ok() else { continue };
-            let Some(qend) = fields[2].parse::<u32>().ok() else { continue };
-            let Some(qlen) = fields[3].parse::<u32>().ok() else { continue };
-            let Some(slen) = fields[5].parse::<u32>().ok() else { continue };
-            let Some(score) = fields[6].parse::<i32>().ok() else { continue };
+            let Some(rep_idx) = fields[0]
+                .strip_prefix("rep:")
+                .and_then(|s| s.parse::<usize>().ok())
+            else {
+                continue;
+            };
+            let Some(cds_idx) = fields[4]
+                .strip_prefix("cds:")
+                .and_then(|s| s.parse::<usize>().ok())
+            else {
+                continue;
+            };
+            let Some(qstart) = fields[1].parse::<u32>().ok() else {
+                continue;
+            };
+            let Some(qend) = fields[2].parse::<u32>().ok() else {
+                continue;
+            };
+            let Some(qlen) = fields[3].parse::<u32>().ok() else {
+                continue;
+            };
+            let Some(slen) = fields[5].parse::<u32>().ok() else {
+                continue;
+            };
+            let Some(score) = fields[6].parse::<i32>().ok() else {
+                continue;
+            };
 
             raw_hits.push((score, rep_idx, cds_idx, qstart, qend, qlen, slen));
         }
@@ -798,8 +934,8 @@ fn parse_blast_results(
     // Python's stable sort preserves file order (BLAST output order ≈ rep_idx order).
     raw_hits.sort_by(|a, b| {
         // tuple: (score, rep_idx, cds_idx, qstart, qend, qlen, slen)
-        b.6.cmp(&a.6)           // slen descending (Python's int(x[5]) sort)
-            .then_with(|| a.1.cmp(&b.1))  // rep_idx ascending (FASTA order)
+        b.6.cmp(&a.6) // slen descending (Python's int(x[5]) sort)
+            .then_with(|| a.1.cmp(&b.1)) // rep_idx ascending (FASTA order)
     });
 
     // When dedup_per_locus is true: keep first hit per (locus, cds_idx) and apply BSR.
@@ -816,12 +952,17 @@ fn parse_blast_results(
             }
         }
 
-        let rep_self = self_scores.get(&rep_idx)
+        let rep_self = self_scores
+            .get(&rep_idx)
             .copied()
             .unwrap_or(representatives[rep_idx].self_score);
-        if rep_self <= 0.0 { continue; }
+        if rep_self <= 0.0 {
+            continue;
+        }
         let bsr = score as f64 / rep_self;
-        if bsr < bsr_threshold { continue; }
+        if bsr < bsr_threshold {
+            continue;
+        }
 
         results.push(ClusterResult {
             cds_idx,
@@ -852,8 +993,10 @@ fn run_blastdb_aliastool(blastp: &Path, text_file: &Path, binary_file: &Path) ->
     let tool = blastp.with_file_name("blastdb_aliastool");
     Command::new(&tool)
         .args([
-            "-seqid_file_in", text_file.to_str().unwrap(),
-            "-seqid_file_out", binary_file.to_str().unwrap(),
+            "-seqid_file_in",
+            text_file.to_str().unwrap(),
+            "-seqid_file_out",
+            binary_file.to_str().unwrap(),
         ])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -874,7 +1017,7 @@ pub fn blast_per_cluster(
     proteins: &[(usize, Vec<u8>)],
     representatives: &[Representative],
     self_scores: &FxHashMap<usize, f64>,
-    clusters: &FxHashMap<usize, Vec<usize>>,  // rep_idx → [cds_idx, ...]
+    clusters: &FxHashMap<usize, Vec<usize>>, // rep_idx → [cds_idx, ...]
     bsr_threshold: f64,
     blastp_path: &str,
     num_threads: usize,
@@ -897,7 +1040,8 @@ pub fn blast_per_cluster(
     let subject_path = temp_dir.join("subject.faa");
     let db_path = temp_dir.join("subject_db");
     {
-        let subject_records: Vec<_> = proteins.iter()
+        let subject_records: Vec<_> = proteins
+            .iter()
             .map(|(cds_idx, prot)| (format!("cds:{cds_idx}"), prot.clone()))
             .collect();
         if write_fasta(&subject_path, &subject_records).is_err() {
@@ -912,9 +1056,8 @@ pub fn blast_per_cluster(
     }
 
     // Prepare per-cluster BLAST tasks, sorted by rep_idx for deterministic ordering
-    let mut cluster_list: Vec<(usize, &Vec<usize>)> = clusters.iter()
-        .map(|(k, v)| (*k, v))
-        .collect();
+    let mut cluster_list: Vec<(usize, &Vec<usize>)> =
+        clusters.iter().map(|(k, v)| (*k, v)).collect();
     cluster_list.sort_unstable_by_key(|(rep_idx, _)| *rep_idx);
 
     let cluster_dir = temp_dir.join("clusters");
@@ -934,7 +1077,8 @@ pub fn blast_per_cluster(
 
     let mut tasks: Vec<ClusterTask> = Vec::with_capacity(num_clusters);
     for (cluster_no, (rep_idx, cds_indices)) in cluster_list.iter().enumerate() {
-        let valid_cds: Vec<usize> = cds_indices.iter()
+        let valid_cds: Vec<usize> = cds_indices
+            .iter()
             .filter(|idx| cds_idx_set.contains(idx))
             .copied()
             .collect();
@@ -943,19 +1087,28 @@ pub fn blast_per_cluster(
         }
 
         let cdir = cluster_dir.join(format!("{cluster_no}"));
-        if fs::create_dir_all(&cdir).is_err() { continue; }
+        if fs::create_dir_all(&cdir).is_err() {
+            continue;
+        }
 
         // Write single-rep query FASTA
         let query_path = cdir.join("query.faa");
         let rep = &representatives[*rep_idx];
-        if write_fasta(&query_path, &[(format!("rep:{rep_idx}"), rep.protein_seq.clone())]).is_err() {
+        if write_fasta(
+            &query_path,
+            &[(format!("rep:{rep_idx}"), rep.protein_seq.clone())],
+        )
+        .is_err()
+        {
             continue;
         }
 
         // Write seqidlist (text)
         let ids_text_path = cdir.join("ids.txt");
         {
-            let Ok(mut f) = fs::File::create(&ids_text_path) else { continue };
+            let Ok(mut f) = fs::File::create(&ids_text_path) else {
+                continue;
+            };
             for &cds_idx in &valid_cds {
                 let _ = writeln!(f, "cds:{cds_idx}");
             }
@@ -985,7 +1138,11 @@ pub fn blast_per_cluster(
     use rayon::prelude::*;
     tasks.par_iter().for_each(|task| {
         run_blastp_db_ext(
-            blastp, &task.query_path, &db_path, &task.output_path, 1,
+            blastp,
+            &task.query_path,
+            &db_path,
+            &task.output_path,
+            1,
             "6 qseqid qstart qend qlen sseqid slen score",
             &["-seqidlist", task.ids_bin_path.to_str().unwrap()],
             "0.001",
@@ -1008,21 +1165,42 @@ pub fn blast_per_cluster(
             let reader = BufReader::new(file);
             for line in reader.lines().map_while(Result::ok) {
                 let fields: Vec<_> = line.split('\t').collect();
-                if fields.len() < 7 { continue; }
+                if fields.len() < 7 {
+                    continue;
+                }
 
-                let Some(r_idx) = fields[0].strip_prefix("rep:")
-                    .and_then(|s| s.parse::<usize>().ok()) else { continue };
-                let Some(cds_idx) = fields[4].strip_prefix("cds:")
-                    .and_then(|s| s.parse::<usize>().ok()) else { continue };
-                let Some(qstart) = fields[1].parse::<u32>().ok() else { continue };
-                let Some(qend) = fields[2].parse::<u32>().ok() else { continue };
-                let Some(qlen) = fields[3].parse::<u32>().ok() else { continue };
-                let Some(slen) = fields[5].parse::<u32>().ok() else { continue };
-                let Some(score) = fields[6].parse::<i32>().ok() else { continue };
+                let Some(r_idx) = fields[0]
+                    .strip_prefix("rep:")
+                    .and_then(|s| s.parse::<usize>().ok())
+                else {
+                    continue;
+                };
+                let Some(cds_idx) = fields[4]
+                    .strip_prefix("cds:")
+                    .and_then(|s| s.parse::<usize>().ok())
+                else {
+                    continue;
+                };
+                let Some(qstart) = fields[1].parse::<u32>().ok() else {
+                    continue;
+                };
+                let Some(qend) = fields[2].parse::<u32>().ok() else {
+                    continue;
+                };
+                let Some(qlen) = fields[3].parse::<u32>().ok() else {
+                    continue;
+                };
+                let Some(slen) = fields[5].parse::<u32>().ok() else {
+                    continue;
+                };
+                let Some(score) = fields[6].parse::<i32>().ok() else {
+                    continue;
+                };
 
-                locus_hits.entry(locus_idx).or_default().push(
-                    (score, r_idx, cds_idx, qstart, qend, qlen, slen)
-                );
+                locus_hits
+                    .entry(locus_idx)
+                    .or_default()
+                    .push((score, r_idx, cds_idx, qstart, qend, qlen, slen));
             }
         }
     }
@@ -1032,10 +1210,7 @@ pub fn blast_per_cluster(
     for (_locus_idx, hits) in &mut locus_hits {
         // Sort by slen DESC. For ties, rep_idx ASC (approximates Python's concatenation order
         // since we process clusters in rep_idx order).
-        hits.sort_by(|a, b| {
-            b.6.cmp(&a.6)
-                .then(a.1.cmp(&b.1))
-        });
+        hits.sort_by(|a, b| b.6.cmp(&a.6).then(a.1.cmp(&b.1)));
 
         // Keep first hit per target CDS
         let mut seen_targets: FxHashSet<usize> = FxHashSet::default();
@@ -1044,12 +1219,17 @@ pub fn blast_per_cluster(
                 continue;
             }
 
-            let rep_self = self_scores.get(&rep_idx)
+            let rep_self = self_scores
+                .get(&rep_idx)
                 .copied()
                 .unwrap_or(representatives[rep_idx].self_score);
-            if rep_self <= 0.0 { continue; }
+            if rep_self <= 0.0 {
+                continue;
+            }
             let bsr = score as f64 / rep_self;
-            if bsr < bsr_threshold { continue; }
+            if bsr < bsr_threshold {
+                continue;
+            }
 
             results.push(ClusterResult {
                 cds_idx,
@@ -1070,13 +1250,19 @@ pub fn blast_per_cluster(
 
     // Cleanup
     if std::env::var("CHEWCALL_DEBUG_BLAST").is_ok() {
-        eprintln!("  DEBUG: per-cluster BLAST files kept at {}", temp_dir.display());
+        eprintln!(
+            "  DEBUG: per-cluster BLAST files kept at {}",
+            temp_dir.display()
+        );
     } else {
         let _ = fs::remove_dir_all(&temp_dir);
     }
 
-    eprintln!("  Per-cluster BLAST results: {} hits across {} loci",
-        results.len(), locus_hits.len());
+    eprintln!(
+        "  Per-cluster BLAST results: {} hits across {} loci",
+        results.len(),
+        locus_hits.len()
+    );
 
     results
 }

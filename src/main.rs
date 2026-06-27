@@ -1,24 +1,24 @@
 //! chewcall: Fast allele caller for cgMLST/wgMLST schemas.
 
-use std::path::PathBuf;
 use clap::Parser;
+use std::path::PathBuf;
 
-mod types;
-mod translate;
-mod schema;
-mod cds;
-mod dedup;
-mod classify;
 mod blast;
+mod cds;
+mod classify;
 mod cluster;
-mod sw;
+mod dedup;
+mod gpu_sw;
+mod output;
 mod parasail_ffi;
+mod pipeline;
 mod prodigal_ffi;
 mod prodigal_rs;
 mod repdet;
-mod output;
-mod gpu_sw;
-mod pipeline;
+mod schema;
+mod sw;
+mod translate;
+mod types;
 
 use types::Config;
 
@@ -104,6 +104,18 @@ struct Cli {
     /// Minimum shared minimizer fraction for candidate selection (default: 0.2 = 20%)
     #[arg(long, default_value = "0.2")]
     minimizer_threshold: f64,
+
+    /// Residual safety net: bypass the minimizer pre-filter and align each unmatched
+    /// CDS against all representatives. Eliminates filter-induced misses (equivalent to
+    /// chewBBACA's exhaustive per-locus comparison) at higher cost. Off by default.
+    #[arg(long)]
+    brute_residual: bool,
+
+    /// Minimizer ordering for the fast-mode pre-filter: "hash" (FNV-1a, default,
+    /// deterministic) or "lexicographic" (mirrors chewBBACA's Python ordering).
+    /// Only affects the Phase 4 candidate selection; reported for determinism studies.
+    #[arg(long, default_value = "hash")]
+    minimizer_order: String,
 }
 
 fn main() {
@@ -119,7 +131,10 @@ fn main() {
         "fast" => types::AlignMode::Fast,
         "compatible" => types::AlignMode::Compatible,
         other => {
-            eprintln!("Error: unknown mode '{}'. Use 'fast' or 'compatible'.", other);
+            eprintln!(
+                "Error: unknown mode '{}'. Use 'fast' or 'compatible'.",
+                other
+            );
             std::process::exit(1);
         }
     };
@@ -132,11 +147,13 @@ fn main() {
         cpu_cores: cli.cpu,
         prodigal_mode: cli.prodigal_mode,
         use_gpu: cli.gpu,
-        prodigal_path: cli.prodigal_path
+        prodigal_path: cli
+            .prodigal_path
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_else(|| "prodigal".to_string()),
         align_mode,
-        blastp_path: cli.blastp_path
+        blastp_path: cli
+            .blastp_path
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_else(|| "blastp".to_string()),
         cds_input: cli.cds_input.is_some(),
@@ -145,12 +162,27 @@ fn main() {
         minimizer_w: cli.minimizer_w,
         minimizer_threshold: cli.minimizer_threshold,
         use_prodigal_ffi: cli.prodigal_ffi,
+        brute_residual: cli.brute_residual,
+        lexicographic_minimizers: match cli.minimizer_order.as_str() {
+            "hash" => false,
+            "lexicographic" => true,
+            other => {
+                eprintln!(
+                    "Error: unknown --minimizer-order '{}'. Use 'hash' or 'lexicographic'.",
+                    other
+                );
+                std::process::exit(1);
+            }
+        },
     };
 
     // Discover genome files
     let genome_paths = discover_genomes(&cli.input);
     if genome_paths.is_empty() {
-        eprintln!("Error: no genome FASTA files found in {}", cli.input.display());
+        eprintln!(
+            "Error: no genome FASTA files found in {}",
+            cli.input.display()
+        );
         std::process::exit(1);
     }
     eprintln!("Found {} genome files", genome_paths.len());

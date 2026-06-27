@@ -1,7 +1,7 @@
 //! Output generation: write results_alleles.tsv, results_statistics.tsv, etc.
 
-use std::io::{BufWriter, Write};
 use std::fs::File;
+use std::io::{BufWriter, Write};
 use std::path::Path;
 
 use crate::types::*;
@@ -182,7 +182,7 @@ pub fn write_loci_summary(
 /// Write novel alleles FASTA.
 pub fn write_novel_alleles(
     output_path: &Path,
-    novel_alleles: &[(String, Vec<u8>)],  // (header, dna_seq)
+    novel_alleles: &[(String, Vec<u8>)], // (header, dna_seq)
 ) -> std::io::Result<()> {
     let file = File::create(output_path)?;
     let mut w = BufWriter::new(file);
@@ -200,22 +200,27 @@ pub fn write_novel_alleles(
 }
 
 /// Write results_contigsInfo.tsv (CDS coordinates for valid matches).
-pub fn write_contigs_info(
-    output_path: &Path,
-    contigs_info: &[ContigInfo],
-) -> std::io::Result<()> {
+pub fn write_contigs_info(output_path: &Path, contigs_info: &[ContigInfo]) -> std::io::Result<()> {
     let file = File::create(output_path)?;
     let mut w = BufWriter::new(file);
 
-    writeln!(w, "Genome\tContig\tLocus\tStart\tStop\tStrand\tCDS_Length\tClassification")?;
+    writeln!(
+        w,
+        "Genome\tContig\tLocus\tStart\tStop\tStrand\tCDS_Length\tClassification"
+    )?;
 
     for info in contigs_info {
         writeln!(
             w,
             "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
-            info.genome, info.contig, info.locus,
-            info.start, info.stop, info.strand,
-            info.cds_length, info.class.as_str()
+            info.genome,
+            info.contig,
+            info.locus,
+            info.start,
+            info.stop,
+            info.strand,
+            info.cds_length,
+            info.class.as_str()
         )?;
     }
 
@@ -288,7 +293,7 @@ fn format_hashed_cell(
 /// `*` prefix indicates inferred allele, matching chewBBACA convention).
 pub fn update_schema_fasta(
     schema_dir: &Path,
-    novel_alleles: &[(String, Vec<u8>)],  // (header, dna_seq) — header is "locus_cdsid"
+    novel_alleles: &[(String, Vec<u8>)], // (header, dna_seq) — header is "locus_cdsid"
     loci_list: &[String],
 ) -> std::io::Result<()> {
     use std::collections::HashMap;
@@ -302,7 +307,9 @@ pub fn update_schema_fasta(
     for (header, seq) in novel_alleles {
         // Header format: "locus_name_cdsid" — find which locus matches
         for locus_name in loci_list {
-            if header.starts_with(locus_name) && header.as_bytes().get(locus_name.len()) == Some(&b'_') {
+            if header.starts_with(locus_name)
+                && header.as_bytes().get(locus_name.len()) == Some(&b'_')
+            {
                 by_locus.entry(locus_name.as_str()).or_default().push(seq);
                 break;
             }
@@ -313,7 +320,10 @@ pub fn update_schema_fasta(
     for (locus_name, seqs) in &by_locus {
         let fasta_path = schema_dir.join(format!("{}.fasta", locus_name));
         if !fasta_path.exists() {
-            eprintln!("[Schema] Warning: {} not found, skipping", fasta_path.display());
+            eprintln!(
+                "[Schema] Warning: {} not found, skipping",
+                fasta_path.display()
+            );
             continue;
         }
 
@@ -323,7 +333,9 @@ pub fn update_schema_fasta(
         for line in content.lines() {
             if let Some(header) = line.strip_prefix('>') {
                 // Header format: "locus_name_N" or "locus_name_*N"
-                let suffix = header.strip_prefix(locus_name).and_then(|s| s.strip_prefix('_'));
+                let suffix = header
+                    .strip_prefix(locus_name)
+                    .and_then(|s| s.strip_prefix('_'));
                 if let Some(id_str) = suffix {
                     let id_str = id_str.trim_start_matches('*');
                     if let Ok(id) = id_str.parse::<u32>() {

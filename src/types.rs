@@ -1,6 +1,5 @@
 //! Shared types for the AlleleCall pipeline.
 
-
 /// SHA256 hash of a DNA or protein sequence (32 bytes).
 pub type SeqHash = [u8; 32];
 
@@ -27,8 +26,8 @@ pub struct CdsCoord {
 /// A predicted CDS with its metadata.
 #[derive(Debug, Clone)]
 pub struct Cds {
-    pub id: String,         // unique ID: "genome_idx-proteinN"
-    pub dna_seq: Vec<u8>,   // DNA sequence
+    pub id: String,       // unique ID: "genome_idx-proteinN"
+    pub dna_seq: Vec<u8>, // DNA sequence
     pub genome_idx: GenomeIdx,
     pub coord: Option<CdsCoord>,
 }
@@ -103,13 +102,13 @@ pub struct LocusResult {
 /// Schema locus information.
 #[derive(Debug, Clone)]
 pub struct Locus {
-    pub id: String,           // locus identifier (e.g., "locus_1")
-    pub fasta_path: String,   // path to locus FASTA file
-    pub short_path: String,   // path to representative alleles FASTA
+    pub id: String,         // locus identifier (e.g., "locus_1")
+    pub fasta_path: String, // path to locus FASTA file
+    pub short_path: String, // path to representative alleles FASTA
     pub allele_count: u32,
-    pub max_allele_id: u32,   // highest allele identifier observed in schema FASTA
-    pub mode_length: u32,     // most frequent allele DNA length
-    pub self_score: f64,      // representative self-alignment score
+    pub max_allele_id: u32, // highest allele identifier observed in schema FASTA
+    pub mode_length: u32,   // most frequent allele DNA length
+    pub self_score: f64,    // representative self-alignment score
 }
 
 /// Representative allele for a locus.
@@ -125,11 +124,11 @@ pub struct Representative {
 /// Alignment result from Smith-Waterman.
 #[derive(Debug, Clone)]
 pub struct SwResult {
-    pub query_id: usize,   // index into query array
-    pub target_id: usize,  // index into target array
+    pub query_id: usize,  // index into query array
+    pub target_id: usize, // index into target array
     pub score: i32,
-    pub query_start: u32,  // 1-based
-    pub query_end: u32,    // 1-based
+    pub query_start: u32, // 1-based
+    pub query_end: u32,   // 1-based
     pub query_len: u32,
     pub target_len: u32,
     pub target_start: u32, // 1-based
@@ -148,22 +147,24 @@ pub enum AlignMode {
 /// Configuration for AlleleCall.
 #[derive(Debug, Clone)]
 pub struct Config {
-    pub bsr_threshold: f64,        // default 0.6
-    pub size_threshold: f64,       // default 0.2
-    pub min_sequence_length: u32,  // default 0 (auto)
-    pub translation_table: u8,     // default 11
+    pub bsr_threshold: f64,       // default 0.6
+    pub size_threshold: f64,      // default 0.2
+    pub min_sequence_length: u32, // default 0 (auto)
+    pub translation_table: u8,    // default 11
     pub cpu_cores: usize,
-    pub prodigal_mode: String,     // "single" or "meta"
-    pub use_gpu: bool,             // use CUDA GPU for SW alignment
-    pub prodigal_path: String,     // path to prodigal binary
-    pub align_mode: AlignMode,     // fast (parasail) or compatible (BLAST)
-    pub blastp_path: String,       // path to blastp binary
-    pub cds_input: bool,           // true if --cds-input was used (skip PLOT classification)
-    pub update_schema: bool,       // append novel alleles to schema FASTA files
-    pub minimizer_k: usize,        // minimizer k-mer size (default 5)
-    pub minimizer_w: usize,        // minimizer window size (default 5)
-    pub minimizer_threshold: f64,  // minimum shared minimizer fraction (default 0.2)
-    pub use_prodigal_ffi: bool,    // use libprodigal FFI instead of subprocess
+    pub prodigal_mode: String,          // "single" or "meta"
+    pub use_gpu: bool,                  // use CUDA GPU for SW alignment
+    pub prodigal_path: String,          // path to prodigal binary
+    pub align_mode: AlignMode,          // fast (parasail) or compatible (BLAST)
+    pub blastp_path: String,            // path to blastp binary
+    pub cds_input: bool,                // true if --cds-input was used (skip PLOT classification)
+    pub update_schema: bool,            // append novel alleles to schema FASTA files
+    pub minimizer_k: usize,             // minimizer k-mer size (default 5)
+    pub minimizer_w: usize,             // minimizer window size (default 5)
+    pub minimizer_threshold: f64,       // minimum shared minimizer fraction (default 0.2)
+    pub use_prodigal_ffi: bool,         // use libprodigal FFI instead of subprocess
+    pub brute_residual: bool, // bypass minimizer pre-filter, align residuals against all reps
+    pub lexicographic_minimizers: bool, // fast mode: use lexicographic (compat) minimizer ordering instead of FNV-1a hash
 }
 
 impl Default for Config {
@@ -185,6 +186,8 @@ impl Default for Config {
             minimizer_w: 5,
             minimizer_threshold: 0.2,
             use_prodigal_ffi: false,
+            brute_residual: false,
+            lexicographic_minimizers: false,
         }
     }
 }

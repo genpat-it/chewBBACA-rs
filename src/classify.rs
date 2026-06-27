@@ -14,10 +14,10 @@ pub fn classify_inexact(
     size_threshold: f64,
     coord: Option<&CdsCoord>,
     rep_dna_len: u32,
-    target_start: u32,  // 1-based protein position on representative
-    target_end: u32,    // 1-based protein position on representative
-    target_len: u32,    // representative protein length
-    cds_input: bool,    // true when --cds-input used: skip position classification
+    target_start: u32, // 1-based protein position on representative
+    target_end: u32,   // 1-based protein position on representative
+    target_len: u32,   // representative protein length
+    cds_input: bool,   // true when --cds-input used: skip position classification
 ) -> Classification {
     if bsr < bsr_threshold {
         return Classification::LNF;
@@ -27,9 +27,9 @@ pub fn classify_inexact(
     // When cds_input is true, chewBBACA skips PLOT3/PLOT5/LOTSC checks entirely.
     if !cds_input {
         if let Some(coord) = coord {
-            if let Some(pos_class) = position_classification(
-                coord, rep_dna_len, target_start, target_end, target_len,
-            ) {
+            if let Some(pos_class) =
+                position_classification(coord, rep_dna_len, target_start, target_end, target_len)
+            {
                 return pos_class;
             }
         }
@@ -66,9 +66,9 @@ pub fn position_classification_pub(
 fn position_classification(
     coord: &CdsCoord,
     rep_dna_len: u32,
-    target_start: u32,  // 1-based protein position on representative
-    target_end: u32,    // 1-based protein position on representative
-    target_len: u32,    // representative protein length
+    target_start: u32, // 1-based protein position on representative
+    target_end: u32,   // 1-based protein position on representative
+    target_len: u32,   // representative protein length
 ) -> Option<Classification> {
     if coord.contig_len == 0 {
         return None; // no contig info
@@ -164,7 +164,9 @@ pub fn resolve_multi_match(classes: &[Classification]) -> Classification {
         match c {
             Classification::EXC => exc_count += 1,
             Classification::INF => inf_count += 1,
-            Classification::PLOT3 | Classification::PLOT5 | Classification::LOTSC => has_plot = true,
+            Classification::PLOT3 | Classification::PLOT5 | Classification::LOTSC => {
+                has_plot = true
+            }
             _ => {}
         }
         if !distinct_classes.contains(&c) {
@@ -192,7 +194,11 @@ pub fn resolve_multi_match(classes: &[Classification]) -> Classification {
             let match_count = if exc_count > 0 { exc_count } else { inf_count };
             if match_count == 1 {
                 // Single EXC/INF + ASM/ALM → keep the EXC/INF
-                if exc_count > 0 { Classification::EXC } else { Classification::INF }
+                if exc_count > 0 {
+                    Classification::EXC
+                } else {
+                    Classification::INF
+                }
             } else {
                 Classification::NIPH
             }
@@ -246,29 +252,34 @@ mod tests {
             matches: Vec::new(),
         };
 
-        record_match(&mut result, MatchResult {
-            locus_idx: 0,
-            allele_id: Some(10),
-            class: Classification::EXC,
-            bsr: 1.0,
-            cds_hash: [0; 32],
-            protein_hash: None,
-            representative_id: None,
-        });
+        record_match(
+            &mut result,
+            MatchResult {
+                locus_idx: 0,
+                allele_id: Some(10),
+                class: Classification::EXC,
+                bsr: 1.0,
+                cds_hash: [0; 32],
+                protein_hash: None,
+                representative_id: None,
+            },
+        );
         assert_eq!(result.class, Classification::EXC);
         assert_eq!(result.allele_id, Some(10));
 
-        record_match(&mut result, MatchResult {
-            locus_idx: 0,
-            allele_id: Some(11),
-            class: Classification::INF,
-            bsr: 0.9,
-            cds_hash: [1; 32],
-            protein_hash: None,
-            representative_id: None,
-        });
+        record_match(
+            &mut result,
+            MatchResult {
+                locus_idx: 0,
+                allele_id: Some(11),
+                class: Classification::INF,
+                bsr: 0.9,
+                cds_hash: [1; 32],
+                protein_hash: None,
+                representative_id: None,
+            },
+        );
         assert_eq!(result.class, Classification::NIPH);
         assert_eq!(result.allele_id, None);
     }
-
 }

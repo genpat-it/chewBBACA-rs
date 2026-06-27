@@ -2,7 +2,9 @@
 //!
 //! Uses the exact same CUDA kernel as gpu_sw.py: BLOSUM62, gap_open=11, gap_extend=1.
 
-use cudarc::driver::{CudaContext, CudaFunction, CudaSlice, CudaStream, LaunchConfig, PushKernelArg};
+use cudarc::driver::{
+    CudaContext, CudaFunction, CudaSlice, CudaStream, LaunchConfig, PushKernelArg,
+};
 use cudarc::nvrtc::compile_ptx;
 use std::sync::Arc;
 
@@ -135,7 +137,6 @@ void smith_waterman_batch(
 }
 "#;
 
-
 /// Build the amino acid lookup table (byte -> BLOSUM62 index).
 fn build_aa_lookup() -> [i32; 256] {
     let mut lookup = [22i32; 256]; // default to 'X' index
@@ -158,8 +159,8 @@ fn encode_protein(seq: &[u8], lookup: &[i32; 256]) -> Vec<i32> {
 pub struct GpuSwResult {
     pub pair_idx: usize,
     pub score: i32,
-    pub query_end: u32,    // 1-based
-    pub target_end: u32,   // 1-based
+    pub query_end: u32,  // 1-based
+    pub target_end: u32, // 1-based
     pub query_len: u32,
     pub target_len: u32,
 }
@@ -189,14 +190,19 @@ impl GpuAligner {
         // Upload BLOSUM62
         let blosum_gpu = stream.clone_htod(&BLOSUM62)?;
 
-        eprintln!("  GPU init: ctx={:.1}ms, ptx_compile={:.1}ms, load_module={:.1}ms, total={:.1}ms",
+        eprintln!(
+            "  GPU init: ctx={:.1}ms, ptx_compile={:.1}ms, load_module={:.1}ms, total={:.1}ms",
             t_ctx.as_secs_f64() * 1000.0,
             (t_ptx - t_ctx).as_secs_f64() * 1000.0,
             (t_load - t_ptx).as_secs_f64() * 1000.0,
             t0.elapsed().as_secs_f64() * 1000.0,
         );
 
-        Ok(Self { stream, blosum_gpu, func })
+        Ok(Self {
+            stream,
+            blosum_gpu,
+            func,
+        })
     }
 
     /// Align batched pairs of protein sequences on GPU.
@@ -213,8 +219,10 @@ impl GpuAligner {
         let lookup = build_aa_lookup();
 
         // Encode sequences
-        let encoded_queries: Vec<Vec<i32>> = queries.iter().map(|q| encode_protein(q, &lookup)).collect();
-        let encoded_targets: Vec<Vec<i32>> = targets.iter().map(|t| encode_protein(t, &lookup)).collect();
+        let encoded_queries: Vec<Vec<i32>> =
+            queries.iter().map(|q| encode_protein(q, &lookup)).collect();
+        let encoded_targets: Vec<Vec<i32>> =
+            targets.iter().map(|t| encode_protein(t, &lookup)).collect();
 
         // Compute offsets and lengths
         let mut q_lengths = Vec::with_capacity(num_pairs);
@@ -355,13 +363,22 @@ impl GpuAligner {
         }
 
         // Build flattened arrays per bucket and launch kernels
-        let mut results = vec![GpuSwResult {
-            pair_idx: 0, score: 0, query_end: 0,
-            target_end: 0, query_len: 0, target_len: 0,
-        }; num_pairs];
+        let mut results = vec![
+            GpuSwResult {
+                pair_idx: 0,
+                score: 0,
+                query_end: 0,
+                target_end: 0,
+                query_len: 0,
+                target_len: 0,
+            };
+            num_pairs
+        ];
 
         for bucket in buckets.iter() {
-            if bucket.is_empty() { continue; }
+            if bucket.is_empty() {
+                continue;
+            }
 
             // Process bucket in chunks to avoid CUDA errors on large batches
             for chunk_start in (0..bucket.len()).step_by(GPU_CHUNK_SIZE) {
@@ -387,8 +404,12 @@ impl GpuAligner {
                     let tl = te.len() as i32;
                     q_lengths.push(ql);
                     t_lengths.push(tl);
-                    if ql > max_qlen { max_qlen = ql; }
-                    if tl > max_tlen { max_tlen = tl; }
+                    if ql > max_qlen {
+                        max_qlen = ql;
+                    }
+                    if tl > max_tlen {
+                        max_tlen = tl;
+                    }
                     flat_queries.extend_from_slice(qe);
                     flat_targets.extend_from_slice(te);
                 }
@@ -450,8 +471,11 @@ impl GpuAligner {
 
         // CPU fallback for long sequences (> MAX_GPU_QLEN)
         if !cpu_fallback.is_empty() {
-            eprintln!("  GPU: {} pairs falling back to CPU (query > {} aa)",
-                      cpu_fallback.len(), MAX_GPU_QLEN);
+            eprintln!(
+                "  GPU: {} pairs falling back to CPU (query > {} aa)",
+                cpu_fallback.len(),
+                MAX_GPU_QLEN
+            );
             for &pair_i in &cpu_fallback {
                 let q = all_queries[query_indices[pair_i]];
                 let t = all_targets[target_indices[pair_i]];
@@ -468,9 +492,13 @@ impl GpuAligner {
         }
 
         let t_done = t0.elapsed();
-        eprintln!("  GPU: {} pairs aligned in {:.1}ms ({} GPU + {} CPU fallback)",
-                  num_pairs, t_done.as_secs_f64() * 1000.0,
-                  num_pairs - cpu_fallback.len(), cpu_fallback.len());
+        eprintln!(
+            "  GPU: {} pairs aligned in {:.1}ms ({} GPU + {} CPU fallback)",
+            num_pairs,
+            t_done.as_secs_f64() * 1000.0,
+            num_pairs - cpu_fallback.len(),
+            cpu_fallback.len()
+        );
 
         Ok(results)
     }

@@ -1,18 +1,25 @@
 //! schema_audit_pareto — parameter-sweep audit for chewcall's minimizer-overlap pre-filter.
 //!
 //! Exploratory companion to `schema_audit`. Instead of evaluating one fixed
-//! (k, w, τ) tuple, it sweeps a user-specified grid of values and reports for
-//! each tuple:
+//! (k, w, τ) tuple, it sweeps a user-specified grid over four parameters
+//! (k, w, τ, κ) and reports for each tuple:
 //!   - n_flagged = |V_τ|  (loci with wcr < τ at this k, w)
 //!   - mean / median / 10th-percentile / global-min of per-locus wcr
-//!   - sw_work_proxy = total (allele, rep) pairs with MO ≥ τ across the schema
-//!     (an upper bound on the number of exact-SW evaluations a worst-case
-//!     query workload would trigger at the cluster stage)
+//!   - sw_work_proxy = worst-case number of exact-SW evaluations the cluster
+//!     stage would trigger: per query allele, min(κ, #reps with MO ≥ τ),
+//!     summed over the schema (κ = 0 means an unbounded candidate cap)
 //!   - mean_M = mean number of minimizers per schema allele at this (k, w)
 //! It then marks the Pareto-optimal tuples on the bi-objective
 //! (n_flagged, sw_work_proxy) — fewer flagged loci AND less SW work, both
-//! minimized. The output TSV is sorted and the stderr summary lists the
-//! frontier in human-readable form.
+//! minimized.
+//!
+//! κ (the top-K candidate cap, `--max-targets` in chewcall's cluster stage)
+//! does NOT change best-match recall under the per-locus audit model: the
+//! highest-MO representative of a locus is always rank 1 and always survives a
+//! top-κ truncation for κ ≥ 1. κ therefore only bounds SW work here; its
+//! residual cross-locus recall effect (a same-locus rep displaced from the
+//! global top-κ by higher-MO reps of OTHER loci) is outside the per-locus
+//! model and is a documented scope limitation of the audit.
 //!
 //! This is a stand-alone exploratory tool and does NOT replace `schema_audit`;
 //! the latter remains the canonical single-point audit used in the paper.
@@ -23,6 +30,7 @@
 //!         --k-values 4,5,6,7 \
 //!         --w-values 3,5,7,9 \
 //!         --tau-values 0.10,0.15,0.20,0.25,0.30 \
+//!         --kappa-values 5,10,20,30,0 \
 //!         --out pareto.tsv \
 //!         --cpu 8
 
@@ -35,7 +43,9 @@ use chewcall::translate;
 
 #[derive(Parser, Debug)]
 #[command(name = "chewcall-schema-audit-pareto", version)]
-#[command(about = "Pareto-frontier parameter sweep for chewcall's minimizer-overlap pre-filter")]
+#[command(
+    about = "Pareto-frontier (k, w, τ, κ) parameter sweep for chewcall's minimizer-overlap pre-filter"
+)]
 struct Cli {
     /// Schema directory (chewBBACA layout: locus FASTA files + short/ subdir)
     #[arg(short = 'g', long)]
@@ -56,6 +66,11 @@ struct Cli {
     /// Comma-separated list of thresholds to evaluate (e.g. "0.10,0.15,0.20,0.25,0.30")
     #[arg(long, default_value = "0.10,0.15,0.20,0.25,0.30")]
     tau_values: String,
+
+    /// Comma-separated list of top-K candidate caps to evaluate (e.g. "5,10,20,30,0").
+    /// 0 means an unbounded cap (every representative above τ is a candidate).
+    #[arg(long, default_value = "5,10,20,30,0")]
+    kappa_values: String,
 
     /// Translation table for DNA-to-protein conversion
     #[arg(short = 't', long, default_value = "11")]
@@ -107,7 +122,10 @@ fn minimizers(seq: &[u8], k: usize, w: usize) -> FxHashSet<u64> {
         return out;
     }
     for window_start in 0..=(kmer_hashes.len() - w) {
-        let m = *kmer_hashes[window_start..window_start + w].iter().min().unwrap();
+        let m = *kmer_hashes[window_start..window_start + w]
+            .iter()
+            .min()
+            .unwrap();
         out.insert(m);
     }
     out
@@ -194,6 +212,7 @@ struct TupleResult {
     k: usize,
     w: usize,
     tau: f64,
+    kappa: usize,
     n_total: usize,
     n_flagged: usize,
     mean_wcr: f64,
@@ -205,14 +224,13 @@ struct TupleResult {
     pareto: bool,
 }
 
-/// Per-(k, w) precomputed structure: for each locus, the list of per-allele
-/// best-MO values; plus a flat list of all (allele, rep) MOs for the sw_work
-/// histogram.
+/// Per-(k, w) precomputed structure.
 struct KwAudit {
     /// per_locus_best[i][j] = max-over-reps MO for allele j of locus i
     per_locus_best: Vec<Vec<f64>>,
-    /// all pair MOs flattened (for sw_work_proxy)
-    all_pair_mos: Vec<f64>,
+    /// per_allele_mos[a] = MOs of allele a against each same-locus rep
+    /// (flattened across loci; used for the κ-capped sw_work proxy)
+    per_allele_mos: Vec<Vec<f64>>,
     /// mean |M(p)| over all schema alleles
     mean_n_min: f64,
 }
@@ -223,40 +241,40 @@ fn run_kw_audit(
     k: usize,
     w: usize,
 ) -> KwAudit {
-    // Compute everything in parallel per locus
-    let per_locus: Vec<(Vec<f64>, Vec<f64>, usize, usize)> = locus_alleles
+    let per_locus: Vec<(Vec<f64>, Vec<Vec<f64>>, usize, usize)> = locus_alleles
         .par_iter()
         .zip(locus_reps.par_iter())
         .map(|(alleles, reps)| {
-            let rep_mins: Vec<FxHashSet<u64>> =
-                reps.iter().map(|p| minimizers(p, k, w)).collect();
+            let rep_mins: Vec<FxHashSet<u64>> = reps.iter().map(|p| minimizers(p, k, w)).collect();
             let mut best_per_allele = Vec::with_capacity(alleles.len());
-            let mut all_pairs = Vec::with_capacity(alleles.len() * reps.len());
+            let mut allele_mos = Vec::with_capacity(alleles.len());
             let mut total_min = 0usize;
             for prot in alleles {
                 let amins = minimizers(prot, k, w);
                 total_min += amins.len();
+                let mut mos = Vec::with_capacity(rep_mins.len());
                 let mut best = 0.0_f64;
                 for rm in &rep_mins {
                     let mo = j_m(&amins, rm);
-                    all_pairs.push(mo);
+                    mos.push(mo);
                     if mo > best {
                         best = mo;
                     }
                 }
                 best_per_allele.push(best);
+                allele_mos.push(mos);
             }
-            (best_per_allele, all_pairs, total_min, alleles.len())
+            (best_per_allele, allele_mos, total_min, alleles.len())
         })
         .collect();
 
     let mut per_locus_best = Vec::with_capacity(per_locus.len());
-    let mut all_pair_mos = Vec::new();
+    let mut per_allele_mos = Vec::new();
     let mut total_min_global = 0usize;
     let mut total_alleles = 0usize;
-    for (best, pairs, tmin, na) in per_locus {
+    for (best, mos, tmin, na) in per_locus {
         per_locus_best.push(best);
-        all_pair_mos.extend(pairs);
+        per_allele_mos.extend(mos);
         total_min_global += tmin;
         total_alleles += na;
     }
@@ -267,12 +285,12 @@ fn run_kw_audit(
     };
     KwAudit {
         per_locus_best,
-        all_pair_mos,
+        per_allele_mos,
         mean_n_min,
     }
 }
 
-fn aggregate_for_tau(audit: &KwAudit, k: usize, w: usize, tau: f64) -> TupleResult {
+fn aggregate(audit: &KwAudit, k: usize, w: usize, tau: f64, kappa: usize) -> TupleResult {
     let mut per_locus_wcr = Vec::with_capacity(audit.per_locus_best.len());
     for best in &audit.per_locus_best {
         if best.is_empty() {
@@ -285,15 +303,34 @@ fn aggregate_for_tau(audit: &KwAudit, k: usize, w: usize, tau: f64) -> TupleResu
     let n_total = per_locus_wcr.len();
     let n_flagged = per_locus_wcr.iter().filter(|x| **x < tau).count();
     let sum: f64 = per_locus_wcr.iter().sum();
-    let mean_wcr = if n_total > 0 { sum / n_total as f64 } else { 0.0 };
+    let mean_wcr = if n_total > 0 {
+        sum / n_total as f64
+    } else {
+        0.0
+    };
     let median_wcr = percentile(&per_locus_wcr, 50.0);
     let p10_wcr = percentile(&per_locus_wcr, 10.0);
     let min_wcr = if n_total > 0 { per_locus_wcr[0] } else { 0.0 };
-    let sw_work_proxy = audit.all_pair_mos.iter().filter(|x| **x >= tau).count();
+
+    // κ-capped SW work: per query allele, min(κ, #reps above τ), summed.
+    let sw_work_proxy: usize = audit
+        .per_allele_mos
+        .iter()
+        .map(|mos| {
+            let c = mos.iter().filter(|x| **x >= tau).count();
+            if kappa == 0 {
+                c
+            } else {
+                c.min(kappa)
+            }
+        })
+        .sum();
+
     TupleResult {
         k,
         w,
         tau,
+        kappa,
         n_total,
         n_flagged,
         mean_wcr,
@@ -317,7 +354,6 @@ fn pareto_frontier(results: &mut [TupleResult]) {
             }
             let a = &results[j];
             let b = &results[i];
-            // a dominates b iff a is <= on both and < on at least one
             let leq = a.n_flagged <= b.n_flagged && a.sw_work_proxy <= b.sw_work_proxy;
             let lt = a.n_flagged < b.n_flagged || a.sw_work_proxy < b.sw_work_proxy;
             if leq && lt {
@@ -326,6 +362,14 @@ fn pareto_frontier(results: &mut [TupleResult]) {
             }
         }
         results[i].pareto = !dominated;
+    }
+}
+
+fn kappa_label(kappa: usize) -> String {
+    if kappa == 0 {
+        "inf".to_string()
+    } else {
+        kappa.to_string()
     }
 }
 
@@ -340,19 +384,21 @@ fn main() {
     let ks = parse_csv_usize(&cli.k_values);
     let ws = parse_csv_usize(&cli.w_values);
     let taus = parse_csv_f64(&cli.tau_values);
+    let kappas = parse_csv_usize(&cli.kappa_values);
 
     eprintln!(
-        "Pareto sweep: schema={}, |loci|={}, |K|={}, |W|={}, |τ|={}, total tuples={}",
+        "Pareto sweep: schema={}, |loci|={}, |K|={}, |W|={}, |τ|={}, |κ|={}, total tuples={}",
         cli.schema.display(),
         loci.len(),
         ks.len(),
         ws.len(),
         taus.len(),
-        ks.len() * ws.len() * taus.len()
+        kappas.len(),
+        ks.len() * ws.len() * taus.len() * kappas.len()
     );
     eprintln!(
-        "Sweeping K={:?}, W={:?}, τ={:?}",
-        ks, ws, taus
+        "Sweeping K={:?}, W={:?}, τ={:?}, κ={:?} (0=unbounded)",
+        ks, ws, taus, kappas
     );
 
     // Read all proteins once per locus (one pass over disk)
@@ -368,7 +414,9 @@ fn main() {
             }
             if cli.exclude_inferred {
                 alleles.retain(|(id, _)| {
-                    id.rsplit('_').next().map_or(true, |suf| !suf.starts_with('*'))
+                    id.rsplit('_')
+                        .next()
+                        .map_or(true, |suf| !suf.starts_with('*'))
                 });
                 if alleles.is_empty() {
                     return None;
@@ -385,10 +433,8 @@ fn main() {
         read_t0.elapsed().as_secs_f64()
     );
 
-    let locus_alleles: Vec<Vec<Vec<u8>>> =
-        per_locus.iter().map(|(_, a, _)| a.clone()).collect();
-    let locus_reps: Vec<Vec<Vec<u8>>> =
-        per_locus.iter().map(|(_, _, r)| r.clone()).collect();
+    let locus_alleles: Vec<Vec<Vec<u8>>> = per_locus.iter().map(|(_, a, _)| a.clone()).collect();
+    let locus_reps: Vec<Vec<Vec<u8>>> = per_locus.iter().map(|(_, _, r)| r.clone()).collect();
 
     let mut all_results: Vec<TupleResult> = Vec::new();
     for &k in &ks {
@@ -396,16 +442,15 @@ fn main() {
             let t0 = std::time::Instant::now();
             let audit = run_kw_audit(&locus_alleles, &locus_reps, k, w);
             let kw_t = t0.elapsed().as_secs_f64();
+            let n_pairs: usize = audit.per_allele_mos.iter().map(|m| m.len()).sum();
             eprintln!(
                 "  (k={}, w={}): pair-MOs={}, mean |M|={:.2}, audit in {:.1}s",
-                k,
-                w,
-                audit.all_pair_mos.len(),
-                audit.mean_n_min,
-                kw_t
+                k, w, n_pairs, audit.mean_n_min, kw_t
             );
             for &tau in &taus {
-                all_results.push(aggregate_for_tau(&audit, k, w, tau));
+                for &kappa in &kappas {
+                    all_results.push(aggregate(&audit, k, w, tau, kappa));
+                }
             }
         }
     }
@@ -422,13 +467,11 @@ fn main() {
     use std::io::Write;
     writeln!(
         writer,
-        "k\tw\ttau\tn_loci\tn_flagged\tflagged_pct\tmean_wcr\tmedian_wcr\tp10_wcr\tmin_wcr\tsw_work_proxy\tmean_n_minimizers\tpareto"
+        "k\tw\ttau\tkappa\tn_loci\tn_flagged\tflagged_pct\tmean_wcr\tmedian_wcr\tp10_wcr\tmin_wcr\tsw_work_proxy\tmean_n_minimizers\tpareto"
     )
     .ok();
-    // Sort by k, w, tau
     all_results.sort_by(|a, b| {
-        (a.k, a.w, (a.tau * 1e9) as i64)
-            .cmp(&(b.k, b.w, (b.tau * 1e9) as i64))
+        (a.k, a.w, (a.tau * 1e9) as i64, a.kappa).cmp(&(b.k, b.w, (b.tau * 1e9) as i64, b.kappa))
     });
     for r in &all_results {
         let pct = if r.n_total > 0 {
@@ -438,10 +481,11 @@ fn main() {
         };
         writeln!(
             writer,
-            "{}\t{}\t{:.2}\t{}\t{}\t{:.3}\t{:.4}\t{:.4}\t{:.4}\t{:.4}\t{}\t{:.2}\t{}",
+            "{}\t{}\t{:.2}\t{}\t{}\t{}\t{:.3}\t{:.4}\t{:.4}\t{:.4}\t{:.4}\t{}\t{:.2}\t{}",
             r.k,
             r.w,
             r.tau,
+            kappa_label(r.kappa),
             r.n_total,
             r.n_flagged,
             pct,
@@ -462,15 +506,25 @@ fn main() {
     eprintln!("=== Pareto frontier on (n_flagged ↓, sw_work_proxy ↓) ===");
     let frontier: Vec<&TupleResult> = all_results.iter().filter(|r| r.pareto).collect();
     let mut frontier_sorted = frontier.clone();
-    frontier_sorted.sort_by(|a, b| a.n_flagged.cmp(&b.n_flagged));
+    frontier_sorted.sort_by(|a, b| {
+        a.n_flagged
+            .cmp(&b.n_flagged)
+            .then(a.sw_work_proxy.cmp(&b.sw_work_proxy))
+    });
     eprintln!(
-        "{:>4}  {:>4}  {:>5}  {:>10}  {:>14}  {:>10}",
-        "k", "w", "tau", "n_flagged", "sw_work_proxy", "mean_wcr"
+        "{:>4}  {:>4}  {:>5}  {:>5}  {:>10}  {:>14}  {:>10}",
+        "k", "w", "tau", "kappa", "n_flagged", "sw_work_proxy", "mean_wcr"
     );
     for r in &frontier_sorted {
         eprintln!(
-            "{:>4}  {:>4}  {:>5.2}  {:>10}  {:>14}  {:>10.4}",
-            r.k, r.w, r.tau, r.n_flagged, r.sw_work_proxy, r.mean_wcr
+            "{:>4}  {:>4}  {:>5.2}  {:>5}  {:>10}  {:>14}  {:>10.4}",
+            r.k,
+            r.w,
+            r.tau,
+            kappa_label(r.kappa),
+            r.n_flagged,
+            r.sw_work_proxy,
+            r.mean_wcr
         );
     }
     eprintln!();
@@ -479,16 +533,20 @@ fn main() {
         all_results.len(),
         frontier_sorted.len()
     );
-    // Highlight chewBBACA default
+    // Highlight chewBBACA / chewcall default (k=5, w=5, τ=0.20, κ=30 cluster cap)
     if let Some(default) = all_results
         .iter()
-        .find(|r| r.k == 5 && r.w == 5 && (r.tau - 0.20).abs() < 1e-6)
+        .find(|r| r.k == 5 && r.w == 5 && (r.tau - 0.20).abs() < 1e-6 && r.kappa == 30)
     {
         eprintln!(
-            "chewBBACA default (k=5, w=5, τ=0.20): n_flagged={}, sw_work_proxy={}, pareto={}",
+            "chewcall default (k=5, w=5, τ=0.20, κ=30): n_flagged={}, sw_work_proxy={}, pareto={}",
             default.n_flagged,
             default.sw_work_proxy,
-            if default.pareto { "yes" } else { "NO (dominated)" }
+            if default.pareto {
+                "yes"
+            } else {
+                "NO (dominated)"
+            }
         );
     }
 }

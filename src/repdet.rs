@@ -33,9 +33,7 @@ pub fn iterative_repdet(
     let max_iterations = 10;
 
     // Process initial_results (from Phase 4) without re-aligning
-    let mut new_reps = process_results(
-        initial_results, &mut remaining, &mut all_results, config,
-    );
+    let mut new_reps = process_results(initial_results, &mut remaining, &mut all_results, config);
 
     // Phase 4 results were already applied by the caller. They are used here
     // only to seed new representatives and trim the remaining unmatched set.
@@ -62,25 +60,20 @@ pub fn iterative_repdet(
                 &remaining,
                 representatives,
                 &index,
-                k, w, min_shared,
+                k,
+                w,
+                min_shared,
                 aligner,
             )
         } else {
-            cluster::cluster_and_align(
-                &remaining,
-                representatives,
-                &index,
-                k, w, min_shared,
-            )
+            cluster::cluster_and_align(&remaining, representatives, &index, k, w, min_shared)
         };
 
         if results.is_empty() {
             break;
         }
 
-        new_reps = process_results(
-            &results, &mut remaining, &mut all_results, config,
-        );
+        new_reps = process_results(&results, &mut remaining, &mut all_results, config);
 
         if new_reps.is_empty() {
             break;

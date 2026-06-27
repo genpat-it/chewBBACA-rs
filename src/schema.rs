@@ -1,10 +1,10 @@
 //! Schema reading: load locus FASTA files, compute allele hashes and modes.
 
+use rayon::prelude::*;
+use rustc_hash::FxHashMap;
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use sha2::{Sha256, Digest};
-use rustc_hash::FxHashMap;
-use rayon::prelude::*;
 
 use crate::translate;
 use crate::types::*;
@@ -20,93 +20,97 @@ struct LocusData {
 }
 
 /// Load a schema from a directory (parallelized with rayon).
-pub fn load_schema(
-    schema_dir: &Path,
-    loci_list: &[String],
-    translation_table: u8,
-) -> Schema {
+pub fn load_schema(schema_dir: &Path, loci_list: &[String], translation_table: u8) -> Schema {
     let short_dir = schema_dir.join("short");
 
     // Process each locus in parallel
-    let locus_data: Vec<LocusData> = loci_list.par_iter().enumerate().map(|(locus_idx, locus_name)| {
-        let locus_idx = locus_idx as LocusIdx;
-        let fasta_path = find_locus_fasta(schema_dir, locus_name);
-        let short_path = find_locus_short(&short_dir, locus_name);
+    let locus_data: Vec<LocusData> = loci_list
+        .par_iter()
+        .enumerate()
+        .map(|(locus_idx, locus_name)| {
+            let locus_idx = locus_idx as LocusIdx;
+            let fasta_path = find_locus_fasta(schema_dir, locus_name);
+            let short_path = find_locus_short(&short_dir, locus_name);
 
-        let mut allele_lengths: Vec<u32> = Vec::new();
-        let mut allele_count = 0u32;
-        let mut max_allele_id = 0u32;
-        let mut dna_entries = Vec::new();
-        let mut protein_entries = Vec::new();
-        let mut crc32_entries = Vec::new();
-        let mut inferred_alleles: Vec<(LocusIdx, AlleleId)> = Vec::new();
+            let mut allele_lengths: Vec<u32> = Vec::new();
+            let mut allele_count = 0u32;
+            let mut max_allele_id = 0u32;
+            let mut dna_entries = Vec::new();
+            let mut protein_entries = Vec::new();
+            let mut crc32_entries = Vec::new();
+            let mut inferred_alleles: Vec<(LocusIdx, AlleleId)> = Vec::new();
 
-        if let Ok(mut reader) = needletail::parse_fastx_file(&fasta_path) {
-            while let Some(Ok(record)) = reader.next() {
-                allele_count += 1;
-                let seq = record.seq();
-                allele_lengths.push(seq.len() as u32);
+            if let Ok(mut reader) = needletail::parse_fastx_file(&fasta_path) {
+                while let Some(Ok(record)) = reader.next() {
+                    allele_count += 1;
+                    let seq = record.seq();
+                    allele_lengths.push(seq.len() as u32);
 
-                let header = std::str::from_utf8(record.id()).unwrap_or("");
-                let (allele_id, is_inferred) = parse_allele_id(header);
-                max_allele_id = max_allele_id.max(allele_id);
-                if is_inferred {
-                    inferred_alleles.push((locus_idx, allele_id));
-                }
+                    let header = std::str::from_utf8(record.id()).unwrap_or("");
+                    let (allele_id, is_inferred) = parse_allele_id(header);
+                    max_allele_id = max_allele_id.max(allele_id);
+                    if is_inferred {
+                        inferred_alleles.push((locus_idx, allele_id));
+                    }
 
-                let dna_upper: Vec<u8> = seq.iter().map(|b| b.to_ascii_uppercase()).collect();
-                let dna_hash = sha256(&dna_upper);
-                dna_entries.push((dna_hash, locus_idx, allele_id));
+                    let dna_upper: Vec<u8> = seq.iter().map(|b| b.to_ascii_uppercase()).collect();
+                    let dna_hash = sha256(&dna_upper);
+                    dna_entries.push((dna_hash, locus_idx, allele_id));
 
-                let seq_str = String::from_utf8_lossy(&seq);
-                let crc = crc32fast::hash(seq_str.as_bytes());
-                crc32_entries.push(((locus_idx, allele_id), crc));
+                    let seq_str = String::from_utf8_lossy(&seq);
+                    let crc = crc32fast::hash(seq_str.as_bytes());
+                    crc32_entries.push(((locus_idx, allele_id), crc));
 
-                if let Some(protein) = translate::translate_cds(&dna_upper, translation_table, true) {
-                    let prot_hash = sha256(&protein);
-                    protein_entries.push((prot_hash, locus_idx, allele_id));
-                }
-            }
-        }
-
-        let mode_length = compute_mode(&allele_lengths);
-
-        // Read all representative alleles from short/*.fasta.
-        let mut representatives = Vec::new();
-
-        if let Ok(mut reader) = needletail::parse_fastx_file(&short_path) {
-            while let Some(Ok(record)) = reader.next() {
-                let seq = record.seq();
-                let dna_upper: Vec<u8> = seq.iter().map(|b| b.to_ascii_uppercase()).collect();
-                if let Some(protein) = translate::translate_cds(&dna_upper, translation_table, true) {
-                    representatives.push(Representative {
-                        locus_idx,
-                        seq_id: String::from_utf8_lossy(record.id()).to_string(),
-                        protein_seq: protein,
-                        dna_length: dna_upper.len() as u32,
-                        self_score: 0.0,
-                    });
+                    if let Some(protein) =
+                        translate::translate_cds(&dna_upper, translation_table, true)
+                    {
+                        let prot_hash = sha256(&protein);
+                        protein_entries.push((prot_hash, locus_idx, allele_id));
+                    }
                 }
             }
-        }
 
-        LocusData {
-            locus: Locus {
-                id: locus_name.clone(),
-                fasta_path: fasta_path.to_string_lossy().to_string(),
-                short_path: short_path.to_string_lossy().to_string(),
-                allele_count,
-                max_allele_id,
-                mode_length,
-                self_score: 0.0,
-            },
-            representatives,
-            dna_entries,
-            protein_entries,
-            crc32_entries,
-            inferred_alleles,
-        }
-    }).collect();
+            let mode_length = compute_mode(&allele_lengths);
+
+            // Read all representative alleles from short/*.fasta.
+            let mut representatives = Vec::new();
+
+            if let Ok(mut reader) = needletail::parse_fastx_file(&short_path) {
+                while let Some(Ok(record)) = reader.next() {
+                    let seq = record.seq();
+                    let dna_upper: Vec<u8> = seq.iter().map(|b| b.to_ascii_uppercase()).collect();
+                    if let Some(protein) =
+                        translate::translate_cds(&dna_upper, translation_table, true)
+                    {
+                        representatives.push(Representative {
+                            locus_idx,
+                            seq_id: String::from_utf8_lossy(record.id()).to_string(),
+                            protein_seq: protein,
+                            dna_length: dna_upper.len() as u32,
+                            self_score: 0.0,
+                        });
+                    }
+                }
+            }
+
+            LocusData {
+                locus: Locus {
+                    id: locus_name.clone(),
+                    fasta_path: fasta_path.to_string_lossy().to_string(),
+                    short_path: short_path.to_string_lossy().to_string(),
+                    allele_count,
+                    max_allele_id,
+                    mode_length,
+                    self_score: 0.0,
+                },
+                representatives,
+                dna_entries,
+                protein_entries,
+                crc32_entries,
+                inferred_alleles,
+            }
+        })
+        .collect();
 
     // Merge results (single-threaded, fast)
     let num_loci = loci_list.len();
@@ -115,7 +119,8 @@ pub fn load_schema(
     let mut dna_hashes: FxHashMap<SeqHash, Vec<(LocusIdx, AlleleId)>> = FxHashMap::default();
     let mut protein_hashes: FxHashMap<SeqHash, Vec<(LocusIdx, AlleleId)>> = FxHashMap::default();
     let mut allele_crc32: FxHashMap<(LocusIdx, AlleleId), u32> = FxHashMap::default();
-    let mut inferred_allele_ids: rustc_hash::FxHashSet<(LocusIdx, AlleleId)> = rustc_hash::FxHashSet::default();
+    let mut inferred_allele_ids: rustc_hash::FxHashSet<(LocusIdx, AlleleId)> =
+        rustc_hash::FxHashSet::default();
 
     for data in locus_data {
         loci.push(data.locus);
@@ -216,11 +221,7 @@ mod tests {
         let short_dir = root.join("short");
         fs::create_dir_all(&short_dir).unwrap();
 
-        fs::write(
-            root.join("locusA.fasta"),
-            b">locusA_1\nATGAAATTTTAA\n",
-        )
-        .unwrap();
+        fs::write(root.join("locusA.fasta"), b">locusA_1\nATGAAATTTTAA\n").unwrap();
         fs::write(
             short_dir.join("locusA_short.fasta"),
             b">locusA_1\nATGAAATTTTAA\n>locusA_2\nATGCCCTTTTAA\n",
@@ -271,9 +272,7 @@ pub fn read_schema_config(schema_dir: &Path) -> SchemaConfig {
     for (key, _is_int) in &keys {
         let key_bytes = key.as_bytes();
         // Find key in pickle data
-        if let Some(pos) = data.windows(key_bytes.len())
-            .position(|w| w == key_bytes)
-        {
+        if let Some(pos) = data.windows(key_bytes.len()).position(|w| w == key_bytes) {
             // Scan forward from after the key to find the value
             let search_start = pos + key_bytes.len();
             let search_end = (search_start + 50).min(data.len());
@@ -284,7 +283,7 @@ pub fn read_schema_config(schema_dir: &Path) -> SchemaConfig {
                 match window[i] {
                     b'G' if i + 9 <= window.len() => {
                         // IEEE 754 double, big-endian
-                        let bytes: [u8; 8] = window[i+1..i+9].try_into().unwrap();
+                        let bytes: [u8; 8] = window[i + 1..i + 9].try_into().unwrap();
                         let val = f64::from_be_bytes(bytes);
                         match *key {
                             "bsr" => config.bsr = Some(val),
@@ -294,7 +293,7 @@ pub fn read_schema_config(schema_dir: &Path) -> SchemaConfig {
                         break;
                     }
                     b'K' if i + 2 <= window.len() => {
-                        let val = window[i+1] as u32;
+                        let val = window[i + 1] as u32;
                         match *key {
                             "translation_table" => config.translation_table = Some(val as u8),
                             "minimum_locus_length" => config.minimum_locus_length = Some(val),
@@ -303,7 +302,7 @@ pub fn read_schema_config(schema_dir: &Path) -> SchemaConfig {
                         break;
                     }
                     b'J' if i + 5 <= window.len() => {
-                        let bytes: [u8; 4] = window[i+1..i+5].try_into().unwrap();
+                        let bytes: [u8; 4] = window[i + 1..i + 5].try_into().unwrap();
                         let val = i32::from_le_bytes(bytes) as u32;
                         match *key {
                             "minimum_locus_length" => config.minimum_locus_length = Some(val),
@@ -332,7 +331,8 @@ fn compute_mode(lengths: &[u32]) -> u32 {
         first_seen.entry(l).or_insert(i);
     }
     // Break ties by first occurrence order (matches Python Counter insertion order)
-    counts.into_iter()
+    counts
+        .into_iter()
         .max_by(|a, b| {
             a.1.cmp(&b.1)
                 .then(first_seen.get(&b.0).cmp(&first_seen.get(&a.0)))

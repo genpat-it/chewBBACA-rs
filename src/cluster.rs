@@ -142,9 +142,7 @@ fn extract_minimizers_hash(seq: &[u8], k: usize, w: usize) -> Vec<Minimizer> {
     }
 
     // Compute k-mer hashes
-    let kmer_hashes: Vec<u64> = (0..num_kmers)
-        .map(|i| hash_kmer(&seq[i..i + k]))
-        .collect();
+    let kmer_hashes: Vec<u64> = (0..num_kmers).map(|i| hash_kmer(&seq[i..i + k])).collect();
 
     if kmer_hashes.len() < w {
         // Fewer k-mers than window size: take the minimum
@@ -419,65 +417,68 @@ fn make_result(
 /// 3. Compute BSR = score / self_score
 /// 4. Return best match per CDS
 pub fn cluster_and_align(
-    proteins: &[(usize, Vec<u8>)],  // (cds_idx, protein_seq)
+    proteins: &[(usize, Vec<u8>)], // (cds_idx, protein_seq)
     representatives: &[Representative],
     index: &FxHashMap<Minimizer, Vec<usize>>,
     k: usize,
     w: usize,
     min_shared: usize,
 ) -> Vec<ClusterResult> {
-    use rayon::prelude::*;
     use crate::parasail_ffi;
+    use rayon::prelude::*;
 
-    proteins.par_iter().filter_map(|(cds_idx, protein)| {
-        let clusters = find_clusters(protein, index, k, w, min_shared, 10);
-        if clusters.is_empty() {
-            return None;
-        }
-
-        // Fast score + end positions with parasail SIMD for all candidates
-        let mut best_score = 0i32;
-        let mut best_bsr = 0.0f64;
-        let mut best_rep = 0usize;
-
-        for &rep_idx in &clusters {
-            let (score, _, _) = parasail_ffi::sw_simd(protein, &representatives[rep_idx].protein_seq);
-            if score <= 0 {
-                continue;
+    proteins
+        .par_iter()
+        .filter_map(|(cds_idx, protein)| {
+            let clusters = find_clusters(protein, index, k, w, min_shared, 10);
+            if clusters.is_empty() {
+                return None;
             }
-            let self_score = representatives[rep_idx].self_score;
-            if self_score <= 0.0 {
-                continue;
+
+            // Fast score + end positions with parasail SIMD for all candidates
+            let mut best_score = 0i32;
+            let mut best_bsr = 0.0f64;
+            let mut best_rep = 0usize;
+
+            for &rep_idx in &clusters {
+                let (score, _, _) =
+                    parasail_ffi::sw_simd(protein, &representatives[rep_idx].protein_seq);
+                if score <= 0 {
+                    continue;
+                }
+                let self_score = representatives[rep_idx].self_score;
+                if self_score <= 0.0 {
+                    continue;
+                }
+                let bsr = score as f64 / self_score;
+                if is_better_global_hit(bsr, score, rep_idx, best_bsr, best_score, best_rep) {
+                    best_score = score;
+                    best_bsr = bsr;
+                    best_rep = rep_idx;
+                }
             }
-            let bsr = score as f64 / self_score;
-            if is_better_global_hit(bsr, score, rep_idx, best_bsr, best_score, best_rep) {
-                best_score = score;
-                best_bsr = bsr;
-                best_rep = rep_idx;
+
+            if best_score <= 0 {
+                return None;
             }
-        }
 
-        if best_score <= 0 {
-            return None;
-        }
+            // Get full positions (including target_start) for the best match only
+            // This costs one extra SIMD reverse-alignment per protein
+            let (_, _, _, target_start, target_end) =
+                parasail_ffi::sw_simd_full(protein, &representatives[best_rep].protein_seq);
 
-        // Get full positions (including target_start) for the best match only
-        // This costs one extra SIMD reverse-alignment per protein
-        let (_, _, _, target_start, target_end) = parasail_ffi::sw_simd_full(
-            protein, &representatives[best_rep].protein_seq
-        );
-
-        Some(make_result(
-            *cds_idx,
-            best_rep,
-            protein,
-            &representatives[best_rep],
-            best_score,
-            best_bsr,
-            target_start,
-            target_end,
-        ))
-    }).collect()
+            Some(make_result(
+                *cds_idx,
+                best_rep,
+                protein,
+                &representatives[best_rep],
+                best_score,
+                best_bsr,
+                target_start,
+                target_end,
+            ))
+        })
+        .collect()
 }
 
 fn collect_best_hits_per_locus(
@@ -545,39 +546,42 @@ fn cluster_and_align_multi_inner_bsr<F>(
 where
     F: Fn(&[u8]) -> Vec<usize> + Sync,
 {
-    use rayon::prelude::*;
     use crate::parasail_ffi;
+    use rayon::prelude::*;
 
-    proteins.par_iter().flat_map_iter(|(cds_idx, protein)| {
-        let clusters = find_candidates(protein);
-        if clusters.is_empty() {
-            return Vec::new().into_iter();
-        }
-
-        let best_hits = collect_best_hits_per_locus(protein, representatives, &clusters);
-        let mut hits = Vec::with_capacity(best_hits.len());
-
-        for (_locus_idx, rep_idx, score, bsr) in best_hits {
-            // Skip expensive sw_simd_full for hits below BSR threshold
-            if bsr < min_bsr {
-                continue;
+    proteins
+        .par_iter()
+        .flat_map_iter(|(cds_idx, protein)| {
+            let clusters = find_candidates(protein);
+            if clusters.is_empty() {
+                return Vec::new().into_iter();
             }
-            let (_, _, _, target_start, target_end) =
-                parasail_ffi::sw_simd_full(protein, &representatives[rep_idx].protein_seq);
-            hits.push(make_result(
-                *cds_idx,
-                rep_idx,
-                protein,
-                &representatives[rep_idx],
-                score,
-                bsr,
-                target_start,
-                target_end,
-            ));
-        }
 
-        hits.into_iter()
-    }).collect()
+            let best_hits = collect_best_hits_per_locus(protein, representatives, &clusters);
+            let mut hits = Vec::with_capacity(best_hits.len());
+
+            for (_locus_idx, rep_idx, score, bsr) in best_hits {
+                // Skip expensive sw_simd_full for hits below BSR threshold
+                if bsr < min_bsr {
+                    continue;
+                }
+                let (_, _, _, target_start, target_end) =
+                    parasail_ffi::sw_simd_full(protein, &representatives[rep_idx].protein_seq);
+                hits.push(make_result(
+                    *cds_idx,
+                    rep_idx,
+                    protein,
+                    &representatives[rep_idx],
+                    score,
+                    bsr,
+                    target_start,
+                    target_end,
+                ));
+            }
+
+            hits.into_iter()
+        })
+        .collect()
 }
 
 /// Return the best hit for each candidate locus using a shared-count filter.
@@ -607,9 +611,35 @@ pub fn cluster_and_align_multi_limited_bsr(
     max_targets: usize,
     min_bsr: f64,
 ) -> Vec<ClusterResult> {
-    cluster_and_align_multi_inner_bsr(proteins, representatives, |protein| {
-        find_clusters(protein, index, k, w, min_shared, max_targets)
-    }, min_bsr)
+    cluster_and_align_multi_inner_bsr(
+        proteins,
+        representatives,
+        |protein| find_clusters(protein, index, k, w, min_shared, max_targets),
+        min_bsr,
+    )
+}
+
+/// Brute-force residual safety net: align every query against ALL representatives,
+/// bypassing the minimizer pre-filter entirely. Per locus, the best-scoring
+/// representative is kept (same as the filtered path). Eliminates filter-induced
+/// misses at the cost of an exhaustive per-query scan.
+pub fn cluster_and_align_multi_brute(
+    proteins: &[(usize, Vec<u8>)],
+    representatives: &[Representative],
+) -> Vec<ClusterResult> {
+    let all: Vec<usize> = (0..representatives.len()).collect();
+    cluster_and_align_multi_inner(proteins, representatives, |_protein| all.clone())
+}
+
+/// Like `cluster_and_align_multi_brute` but skips hits below `min_bsr`
+/// (used by the representative-determination stage).
+pub fn cluster_and_align_multi_brute_bsr(
+    proteins: &[(usize, Vec<u8>)],
+    representatives: &[Representative],
+    min_bsr: f64,
+) -> Vec<ClusterResult> {
+    let all: Vec<usize> = (0..representatives.len()).collect();
+    cluster_and_align_multi_inner_bsr(proteins, representatives, |_protein| all.clone(), min_bsr)
 }
 
 /// Return the best hit for each candidate locus using a similarity filter.
@@ -624,6 +654,23 @@ pub fn cluster_and_align_multi_similarity(
 ) -> Vec<ClusterResult> {
     cluster_and_align_multi_inner(proteins, representatives, |protein| {
         find_clusters_similarity(protein, index, k, w, min_similarity, max_targets)
+    })
+}
+
+/// Like `cluster_and_align_multi_similarity` but uses lexicographic (compat)
+/// minimizer ordering for candidate selection. The `index` MUST have been built
+/// with `build_minimizer_index_compat` so extraction and lookup agree.
+pub fn cluster_and_align_multi_similarity_compat(
+    proteins: &[(usize, Vec<u8>)],
+    representatives: &[Representative],
+    index: &FxHashMap<Minimizer, Vec<usize>>,
+    k: usize,
+    w: usize,
+    min_similarity: f64,
+    max_targets: usize,
+) -> Vec<ClusterResult> {
+    cluster_and_align_multi_inner(proteins, representatives, |protein| {
+        find_clusters_similarity_compat(protein, index, k, w, min_similarity, max_targets)
     })
 }
 
@@ -662,17 +709,26 @@ pub fn align_pairs_gpu(
         return Vec::new();
     }
 
-    eprintln!("  GPU: {} alignment pairs from {} proteins", pair_protein_idx.len(), proteins.len());
+    eprintln!(
+        "  GPU: {} alignment pairs from {} proteins",
+        pair_protein_idx.len(),
+        proteins.len()
+    );
 
     let query_slices: Vec<&[u8]> = proteins.iter().map(|(_, p)| p.as_slice()).collect();
-    let target_slices: Vec<&[u8]> = representatives.iter().map(|r| r.protein_seq.as_slice()).collect();
+    let target_slices: Vec<&[u8]> = representatives
+        .iter()
+        .map(|r| r.protein_seq.as_slice())
+        .collect();
 
-    let gpu_results = aligner.align_indexed(
-        &query_slices,
-        &target_slices,
-        pair_protein_idx,
-        pair_rep_idx,
-    ).expect("GPU alignment failed");
+    let gpu_results = aligner
+        .align_indexed(
+            &query_slices,
+            &target_slices,
+            pair_protein_idx,
+            pair_rep_idx,
+        )
+        .expect("GPU alignment failed");
 
     // Find best per protein: (bsr, score, rep_i)
     let mut best_per_protein: FxHashMap<usize, (f64, i32, usize)> = FxHashMap::default();
@@ -690,7 +746,9 @@ pub fn align_pairs_gpu(
         }
         let bsr = score as f64 / self_score;
 
-        let entry = best_per_protein.entry(prot_i).or_insert((0.0, 0, usize::MAX));
+        let entry = best_per_protein
+            .entry(prot_i)
+            .or_insert((0.0, 0, usize::MAX));
         if is_better_global_hit(bsr, score, rep_i, entry.0, entry.1, entry.2) {
             *entry = (bsr, score, rep_i);
         }
@@ -705,9 +763,8 @@ pub fn align_pairs_gpu(
         let (cds_idx, protein) = &proteins[prot_i];
 
         // Get full positions (target_start/end) via parasail for best match only
-        let (_, _, _, target_start, target_end) = crate::parasail_ffi::sw_simd_full(
-            protein, &representatives[rep_i].protein_seq
-        );
+        let (_, _, _, target_start, target_end) =
+            crate::parasail_ffi::sw_simd_full(protein, &representatives[rep_i].protein_seq);
 
         results.push(make_result(
             *cds_idx,
@@ -752,18 +809,27 @@ pub fn cluster_and_align_gpu(
         return Vec::new();
     }
 
-    eprintln!("  GPU: {} alignment pairs from {} proteins", pair_protein_idx.len(), proteins.len());
+    eprintln!(
+        "  GPU: {} alignment pairs from {} proteins",
+        pair_protein_idx.len(),
+        proteins.len()
+    );
 
     // Phase 2: Batch SW on GPU — scores only, to find best match per protein
     let query_slices: Vec<&[u8]> = proteins.iter().map(|(_, p)| p.as_slice()).collect();
-    let target_slices: Vec<&[u8]> = representatives.iter().map(|r| r.protein_seq.as_slice()).collect();
+    let target_slices: Vec<&[u8]> = representatives
+        .iter()
+        .map(|r| r.protein_seq.as_slice())
+        .collect();
 
-    let gpu_results = aligner.align_indexed(
-        &query_slices,
-        &target_slices,
-        &pair_protein_idx,
-        &pair_rep_idx,
-    ).expect("GPU alignment failed");
+    let gpu_results = aligner
+        .align_indexed(
+            &query_slices,
+            &target_slices,
+            &pair_protein_idx,
+            &pair_rep_idx,
+        )
+        .expect("GPU alignment failed");
 
     // Phase 3: Find best per protein: (bsr, score, rep_i)
     let mut best_per_protein: FxHashMap<usize, (f64, i32, usize)> = FxHashMap::default();
@@ -781,7 +847,9 @@ pub fn cluster_and_align_gpu(
         }
         let bsr = score as f64 / self_score;
 
-        let entry = best_per_protein.entry(prot_i).or_insert((0.0, 0, usize::MAX));
+        let entry = best_per_protein
+            .entry(prot_i)
+            .or_insert((0.0, 0, usize::MAX));
         if is_better_global_hit(bsr, score, rep_i, entry.0, entry.1, entry.2) {
             *entry = (bsr, score, rep_i);
         }
@@ -795,9 +863,8 @@ pub fn cluster_and_align_gpu(
         }
         let (cds_idx, protein) = &proteins[prot_i];
 
-        let (_, _, _, target_start, target_end) = crate::parasail_ffi::sw_simd_full(
-            protein, &representatives[rep_i].protein_seq
-        );
+        let (_, _, _, target_start, target_end) =
+            crate::parasail_ffi::sw_simd_full(protein, &representatives[rep_i].protein_seq);
 
         results.push(make_result(
             *cds_idx,

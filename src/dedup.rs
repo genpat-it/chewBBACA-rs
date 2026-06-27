@@ -3,8 +3,8 @@
 use rayon::prelude::*;
 use rustc_hash::FxHashMap;
 
-use crate::types::*;
 use crate::schema::sha256;
+use crate::types::*;
 
 /// Per-genome info stored alongside each CDS occurrence in hash_to_genomes.
 pub type CdsGenomeEntry = (GenomeIdx, String, Option<CdsCoord>);
@@ -16,7 +16,11 @@ pub type CdsGenomeEntry = (GenomeIdx, String, Option<CdsCoord>);
 /// - all_hashes: pre-computed SHA-256 hash for each CDS (parallel)
 pub fn deduplicate_cds(
     all_cds: &[Cds],
-) -> (Vec<&Cds>, FxHashMap<SeqHash, Vec<CdsGenomeEntry>>, Vec<SeqHash>) {
+) -> (
+    Vec<&Cds>,
+    FxHashMap<SeqHash, Vec<CdsGenomeEntry>>,
+    Vec<SeqHash>,
+) {
     // Step 1: Compute hashes in parallel
     let all_hashes: Vec<SeqHash> = all_cds
         .par_iter()
@@ -34,10 +38,11 @@ pub fn deduplicate_cds(
     for (i, cds) in all_cds.iter().enumerate() {
         let hash = all_hashes[i];
 
-        hash_to_genomes
-            .entry(hash)
-            .or_default()
-            .push((cds.genome_idx, cds.id.clone(), cds.coord.clone()));
+        hash_to_genomes.entry(hash).or_default().push((
+            cds.genome_idx,
+            cds.id.clone(),
+            cds.coord.clone(),
+        ));
 
         if !seen.contains_key(&hash) {
             seen.insert(hash, distinct_cds.len());

@@ -24,9 +24,12 @@ extern "C" {
     fn parasail_matrix_lookup(name: *const c_char) -> *const ParasailMatrix;
 
     fn parasail_sw_striped_sat(
-        s1: *const c_char, s1_len: c_int,
-        s2: *const c_char, s2_len: c_int,
-        open: c_int, gap: c_int,
+        s1: *const c_char,
+        s1_len: c_int,
+        s2: *const c_char,
+        s2_len: c_int,
+        open: c_int,
+        gap: c_int,
         matrix: *const ParasailMatrix,
     ) -> *mut ParasailResult;
 
@@ -45,7 +48,10 @@ fn get_blosum62() -> *const ParasailMatrix {
     let ptr = *BLOSUM62_PTR.get_or_init(|| {
         let name = b"blosum62\0";
         let ptr = unsafe { parasail_matrix_lookup(name.as_ptr() as *const c_char) };
-        assert!(!ptr.is_null(), "Failed to load BLOSUM62 matrix from parasail");
+        assert!(
+            !ptr.is_null(),
+            "Failed to load BLOSUM62 matrix from parasail"
+        );
         ptr as usize
     });
     ptr as *const ParasailMatrix
@@ -64,9 +70,12 @@ pub fn sw_simd(query: &[u8], target: &[u8]) -> (i32, u32, u32) {
 
     let result = unsafe {
         parasail_sw_striped_sat(
-            query.as_ptr() as *const c_char, query.len() as c_int,
-            target.as_ptr() as *const c_char, target.len() as c_int,
-            11, 1, // gap_open, gap_extend (BLAST defaults)
+            query.as_ptr() as *const c_char,
+            query.len() as c_int,
+            target.as_ptr() as *const c_char,
+            target.len() as c_int,
+            11,
+            1, // gap_open, gap_extend (BLAST defaults)
             matrix,
         )
     };

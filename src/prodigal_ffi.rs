@@ -81,9 +81,8 @@ impl ProdigalCtx {
     /// Run gene prediction on a FASTA file and return CDS nucleotide FASTA data.
     /// Returns (fasta_bytes, num_genes) or an error string.
     pub fn run_file_with_seqs(&mut self, fasta_path: &Path) -> Result<(Vec<u8>, i32), String> {
-        let c_path = CString::new(
-            fasta_path.to_str().ok_or("invalid UTF-8 in path")?
-        ).map_err(|e| format!("CString error: {}", e))?;
+        let c_path = CString::new(fasta_path.to_str().ok_or("invalid UTF-8 in path")?)
+            .map_err(|e| format!("CString error: {}", e))?;
 
         let mut buf_ptr: *mut c_char = std::ptr::null_mut();
         let mut buf_len: usize = 0;
