@@ -663,103 +663,142 @@ pub fn run_allele_call(
         t1.duration_since(t0).as_secs_f64()
     );
     eprintln!("[Phase 1] CDS prediction...");
-    let genome_cds: Vec<(Vec<Cds>, u32)> = genome_paths
-        .par_iter()
-        .enumerate()
-        .map(|(genome_idx, path)| {
-            let genome_path = Path::new(path);
-            let genome_stem = genome_path
-                .file_stem()
-                .unwrap_or_default()
-                .to_string_lossy();
+    // Per-genome CDS loader (used by the chunked, memory-bounded load below).
+    let load_one = |genome_idx: usize| -> (Vec<Cds>, u32) {
+        let path = &genome_paths[genome_idx];
+        let genome_path = Path::new(path);
+        let genome_stem = genome_path
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy();
 
-            // Check for pre-computed CDS
-            if let Some(cds_dir) = cds_input_dir {
-                // Strip .cds suffix if present (e.g., "Se_0001.cds" → "Se_0001")
-                let stem_str = genome_stem.to_string();
-                let base_stem = stem_str.strip_suffix(".cds").unwrap_or(&stem_str);
-                let cds_file = cds_dir.join(format!("{}.cds.fasta", base_stem));
-                if cds_file.exists() {
-                    return cds::load_precomputed_cds(&cds_file, genome_idx as GenomeIdx);
-                }
-                // Fallback: try genome file itself as CDS (when -i and --cds-input point to same dir)
-                if let Some(fname) = genome_path.file_name() {
-                    let alt = cds_dir.join(fname);
-                    if alt.exists() {
-                        return cds::load_precomputed_cds(&alt, genome_idx as GenomeIdx);
-                    }
+        // Check for pre-computed CDS
+        if let Some(cds_dir) = cds_input_dir {
+            // Strip .cds suffix if present (e.g., "Se_0001.cds" → "Se_0001")
+            let stem_str = genome_stem.to_string();
+            let base_stem = stem_str.strip_suffix(".cds").unwrap_or(&stem_str);
+            let cds_file = cds_dir.join(format!("{}.cds.fasta", base_stem));
+            if cds_file.exists() {
+                return cds::load_precomputed_cds(&cds_file, genome_idx as GenomeIdx);
+            }
+            // Fallback: try genome file itself as CDS (when -i and --cds-input point to same dir)
+            if let Some(fname) = genome_path.file_name() {
+                let alt = cds_dir.join(fname);
+                if alt.exists() {
+                    return cds::load_precomputed_cds(&alt, genome_idx as GenomeIdx);
                 }
             }
+        }
 
-            // Otherwise, run prodigal (Rust built-in, FFI, or subprocess)
-            let (mut cds_list, invalid) = if let Some(ref trn) = rs_training {
-                // Fastest: pure Rust prodigal (no subprocess, no FFI)
-                cds::predict_cds_rs(genome_path, genome_idx as GenomeIdx, trn)
-            } else if config.use_prodigal_ffi {
-                if let Some(ref trn) = training_file {
-                    cds::predict_cds_ffi(
-                        genome_path,
-                        genome_idx as GenomeIdx,
-                        config.translation_table,
-                        trn,
-                    )
-                } else {
-                    panic!(
-                        "--prodigal-ffi requires a training file (.trn) in the schema directory"
-                    );
-                }
-            } else {
-                cds::predict_cds(
+        // Otherwise, run prodigal (Rust built-in, FFI, or subprocess)
+        let (mut cds_list, invalid) = if let Some(ref trn) = rs_training {
+            // Fastest: pure Rust prodigal (no subprocess, no FFI)
+            cds::predict_cds_rs(genome_path, genome_idx as GenomeIdx, trn)
+        } else if config.use_prodigal_ffi {
+            if let Some(ref trn) = training_file {
+                cds::predict_cds_ffi(
                     genome_path,
                     genome_idx as GenomeIdx,
                     config.translation_table,
-                    &config.prodigal_mode,
-                    training_file.as_deref(),
-                    &config.prodigal_path,
+                    trn,
                 )
-            };
+            } else {
+                panic!("--prodigal-ffi requires a training file (.trn) in the schema directory");
+            }
+        } else {
+            cds::predict_cds(
+                genome_path,
+                genome_idx as GenomeIdx,
+                config.translation_table,
+                &config.prodigal_mode,
+                training_file.as_deref(),
+                &config.prodigal_path,
+            )
+        };
 
-            // Fill contig lengths
-            let contig_lengths = cds::get_contig_lengths(genome_path);
-            let contig_map: FxHashMap<&str, u32> = contig_lengths
-                .iter()
-                .map(|(name, len)| (name.as_str(), *len))
-                .collect();
+        // Fill contig lengths
+        let contig_lengths = cds::get_contig_lengths(genome_path);
+        let contig_map: FxHashMap<&str, u32> = contig_lengths
+            .iter()
+            .map(|(name, len)| (name.as_str(), *len))
+            .collect();
 
-            for cds_item in &mut cds_list {
-                if let Some(ref mut coord) = cds_item.coord {
-                    if let Some(&len) = contig_map.get(coord.contig.as_str()) {
-                        coord.contig_len = len;
-                    }
+        for cds_item in &mut cds_list {
+            if let Some(ref mut coord) = cds_item.coord {
+                if let Some(&len) = contig_map.get(coord.contig.as_str()) {
+                    coord.contig_len = len;
                 }
             }
+        }
 
-            (cds_list, invalid)
-        })
-        .collect();
+        (cds_list, invalid)
+    };
 
-    let total_cds: usize = genome_cds.iter().map(|(cds, _)| cds.len()).sum();
+    // Chunked load fused with streaming deduplication. We hold the full DNA of
+    // at most one chunk of genomes at a time and retain dna_seq only for the
+    // first (distinct) occurrence of each sequence; duplicate occurrences keep
+    // metadata only (dna_seq emptied). Distinct selection follows genome order,
+    // identical to the previous all-at-once deduplication, so results are
+    // unchanged while peak memory drops from O(all CDS) to O(one chunk +
+    // distinct CDS). The per-sequence length needed by the contig-info scan is
+    // cached in `hash_to_len`.
+    const GENOME_CHUNK: usize = 64;
+    let mut all_cds: Vec<Cds> = Vec::new();
+    let mut all_cds_hashes: Vec<SeqHash> = Vec::new();
+    let mut hash_to_genomes: FxHashMap<SeqHash, Vec<dedup::CdsGenomeEntry>> = FxHashMap::default();
+    let mut hash_to_len: FxHashMap<SeqHash, u32> = FxHashMap::default();
+    let mut seen: FxHashSet<SeqHash> = FxHashSet::default();
+    let mut distinct_idx: Vec<usize> = Vec::new();
+    let mut total_cds = 0usize;
+    let mut gstart = 0usize;
+    while gstart < genome_paths.len() {
+        let gend = (gstart + GENOME_CHUNK).min(genome_paths.len());
+        // Load this chunk's genomes in parallel, then flatten.
+        let loaded: Vec<(Vec<Cds>, u32)> =
+            (gstart..gend).into_par_iter().map(&load_one).collect();
+        let mut chunk_cds: Vec<Cds> = Vec::new();
+        for (cds_list, _invalid) in loaded {
+            chunk_cds.extend(cds_list);
+        }
+        // Hash the chunk in parallel (the expensive step; matches the previous
+        // parallel deduplicate_cds), then merge sequentially (cheap).
+        let chunk_hashes: Vec<SeqHash> = chunk_cds
+            .par_iter()
+            .map(|cds| {
+                let upper: Vec<u8> = cds.dna_seq.iter().map(|b| b.to_ascii_uppercase()).collect();
+                schema::sha256(&upper)
+            })
+            .collect();
+        for (mut cds, hash) in chunk_cds.into_iter().zip(chunk_hashes) {
+            total_cds += 1;
+            hash_to_genomes.entry(hash).or_default().push((
+                cds.genome_idx,
+                cds.id.clone(),
+                cds.coord.clone(),
+            ));
+            all_cds_hashes.push(hash);
+            if seen.contains(&hash) {
+                cds.dna_seq = Vec::new(); // free duplicate DNA; metadata retained
+            } else {
+                seen.insert(hash);
+                hash_to_len.insert(hash, cds.dna_seq.len() as u32);
+                distinct_idx.push(all_cds.len());
+            }
+            all_cds.push(cds);
+        }
+        gstart = gend;
+    }
     eprintln!("  Total CDS predicted: {}", total_cds);
 
-    // Flatten all CDS
-    let mut all_cds: Vec<Cds> = Vec::with_capacity(total_cds);
-    for (cds_list, _) in genome_cds {
-        all_cds.extend(cds_list);
-    }
-
-    // --- Phase 2: Deduplication ---
+    // --- Phase 2: Deduplication (streaming; completed during load) ---
     let t2 = std::time::Instant::now();
     eprintln!(
         "  [TIMING] Phase 1: {:.1}s",
         t2.duration_since(t1).as_secs_f64()
     );
     eprintln!("[Phase 2] Deduplicating CDS...");
-    let (distinct_cds, hash_to_genomes, all_cds_hashes) = dedup::deduplicate_cds(&all_cds);
-    eprintln!(
-        "  Distinct CDS: {} (from {})",
-        distinct_cds.len(),
-        all_cds.len()
-    );
+    let distinct_cds: Vec<&Cds> = distinct_idx.iter().map(|&i| &all_cds[i]).collect();
+    eprintln!("  Distinct CDS: {} (from {})", distinct_cds.len(), all_cds.len());
 
     // Track classification per CDS hash → locus
     // We'll track per-genome, per-locus results through hash_to_genomes mapping.
@@ -1452,7 +1491,7 @@ pub fn run_allele_call(
                         start: coord.start,
                         stop: coord.stop,
                         strand: coord.strand,
-                        cds_length: cds_item.dna_seq.len() as u32,
+                        cds_length: hash_to_len.get(&hash).copied().unwrap_or(0),
                         class: all_results[gi][li].class,
                     });
                 }
