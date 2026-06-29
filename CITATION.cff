@@ -1,0 +1,39 @@
+cff-version: 1.2.0
+message: "If you use chewcall, please cite the software (and the accompanying article once available)."
+title: "chewcall: accelerating the chewBBACA allele calling pipeline with minimizer-filtered exact Smith-Waterman alignment"
+type: software
+version: "0.3.0"
+date-released: "2026-06-27"
+license: GPL-3.0-or-later
+repository-code: "https://github.com/genpat-it/chewcall"
+authors:
+  - family-names: "de Ruvo"
+    given-names: "Andrea"
+    orcid: "https://orcid.org/0000-0001-6836-3455"
+    affiliation: "Gran Sasso Science Institute, L'Aquila, Italy; Istituto Zooprofilattico Sperimentale dell'Abruzzo e del Molise \"G. Caporale\", Teramo, Italy"
+  - family-names: "Radomski"
+    given-names: "Nicolas"
+    orcid: "https://orcid.org/0000-0002-7480-4197"
+    affiliation: "Istituto Zooprofilattico Sperimentale dell'Abruzzo e del Molise \"G. Caporale\", Teramo, Italy"
+  - family-names: "Di Pasquale"
+    given-names: "Adriano"
+    orcid: "https://orcid.org/0000-0002-9328-3972"
+    affiliation: "Istituto Zooprofilattico Sperimentale dell'Abruzzo e del Molise \"G. Caporale\", Teramo, Italy"
+keywords:
+  - cgMLST
+  - wgMLST
+  - allele calling
+  - chewBBACA
+  - Smith-Waterman
+  - genomic surveillance
+preferred-citation:
+  type: article
+  title: "chewcall: accelerating the chewBBACA allele calling pipeline with minimizer-filtered exact Smith-Waterman alignment"
+  year: 2026
+  authors:
+    - family-names: "de Ruvo"
+      given-names: "Andrea"
+    - family-names: "Radomski"
+      given-names: "Nicolas"
+    - family-names: "Di Pasquale"
+      given-names: "Adriano"
