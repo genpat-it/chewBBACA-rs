@@ -752,8 +752,7 @@ pub fn run_allele_call(
     while gstart < genome_paths.len() {
         let gend = (gstart + GENOME_CHUNK).min(genome_paths.len());
         // Load this chunk's genomes in parallel, then flatten.
-        let loaded: Vec<(Vec<Cds>, u32)> =
-            (gstart..gend).into_par_iter().map(&load_one).collect();
+        let loaded: Vec<(Vec<Cds>, u32)> = (gstart..gend).into_par_iter().map(&load_one).collect();
         let mut chunk_cds: Vec<Cds> = Vec::new();
         for (cds_list, _invalid) in loaded {
             chunk_cds.extend(cds_list);
@@ -791,7 +790,11 @@ pub fn run_allele_call(
         t2.duration_since(t1).as_secs_f64()
     );
     eprintln!("[Phase 2] Deduplicating CDS...");
-    eprintln!("  Distinct CDS: {} (from {})", distinct_cds.len(), total_cds);
+    eprintln!(
+        "  Distinct CDS: {} (from {})",
+        distinct_cds.len(),
+        total_cds
+    );
 
     // Track classification per CDS hash → locus
     // We'll track per-genome, per-locus results through hash_to_genomes mapping.

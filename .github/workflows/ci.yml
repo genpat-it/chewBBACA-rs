@@ -1,0 +1,59 @@
+name: CI (build, test, validate)
+
+on:
+  push:
+    branches: ["master", "main"]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  PARASAIL_VERSION: v2.6.2
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install build deps
+        run: sudo apt-get update && sudo apt-get install -y cmake build-essential
+
+      - name: Build parasail
+        run: |
+          git clone --depth 1 --branch "${PARASAIL_VERSION}" https://github.com/jeffdaily/parasail.git /opt/parasail
+          cmake -S /opt/parasail -B /opt/parasail/build -DCMAKE_BUILD_TYPE=Release
+          cmake --build /opt/parasail/build -j"$(nproc)"
+
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Formatting check
+        run: cargo fmt --check
+
+      - name: Build (release)
+        env:
+          PARASAIL_DIR: /opt/parasail/build
+        run: cargo build --release --verbose
+
+      - name: Unit tests
+        env:
+          PARASAIL_DIR: /opt/parasail/build
+          LD_LIBRARY_PATH: /opt/parasail/build
+        run: cargo test --release --verbose
+
+      - name: Smoke test (binaries run)
+        env:
+          LD_LIBRARY_PATH: /opt/parasail/build
+        run: |
+          ./target/release/chewcall --help
+          ./target/release/schema_audit --help
+          ./target/release/constructive_remedy --help
+          ./target/release/schema_audit_pareto --help
+
+      - name: End-to-end validation on a tiny synthetic schema
+        env:
+          LD_LIBRARY_PATH: /opt/parasail/build
+        run: bash .github/ci/smoke_validate.sh

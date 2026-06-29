@@ -17,24 +17,22 @@ fn main() {
     let rs_output = chewcall::prodigal_rs::predict_genome(genome_path, &training)
         .expect("Rust prodigal failed");
 
-    let c_output = std::process::Command::new(
-        "prodigal",
-    )
-    .args(&[
-        "-i",
-        &genome,
-        "-t",
-        &trn,
-        "-g",
-        "11",
-        "-d",
-        "/dev/stdout",
-        "-o",
-        "/dev/null",
-        "-q",
-    ])
-    .output()
-    .expect("C prodigal failed");
+    let c_output = std::process::Command::new("prodigal")
+        .args(&[
+            "-i",
+            &genome,
+            "-t",
+            &trn,
+            "-g",
+            "11",
+            "-d",
+            "/dev/stdout",
+            "-o",
+            "/dev/null",
+            "-q",
+        ])
+        .output()
+        .expect("C prodigal failed");
 
     fn parse_cds(data: &[u8]) -> Vec<(String, String)> {
         let text = String::from_utf8_lossy(data);
