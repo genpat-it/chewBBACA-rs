@@ -25,9 +25,9 @@ RUN git clone --depth 1 --branch ${PARASAIL_VERSION} \
 WORKDIR /src
 COPY . /src
 ENV PARASAIL_DIR=/opt/parasail/build
-RUN cargo build --release \
-    && strip target/release/chewcall target/release/schema_audit \
-             target/release/constructive_remedy target/release/schema_audit_pareto || true
+RUN cargo build --release
+RUN strip target/release/chewcall target/release/schema_audit \
+          target/release/constructive_remedy target/release/schema_audit_pareto || true
 
 # ---- Stage 2: runtime ----------------------------------------------
 FROM debian:bookworm-slim AS runtime

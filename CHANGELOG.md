@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 ## [0.3.0] - 2026-06-27
 
 ### Added
+- Docker image (multi-stage build of parasail + chewcall, CPU/SIMD) and a
+  GitHub Actions workflow publishing it to `ghcr.io/genpat-it/chewcall` on tags.
+- The prodigal FFI is now optional at build time (`cfg(have_prodigal)`, set by
+  build.rs only when `libprodigal.a` is present); chewcall builds and runs
+  without libprodigal using the default pure-Rust prodigal-rs predictor.
 - `constructive_remedy` binary: greedily promotes witness alleles to
   representatives so that every locus attains worst-case minimizer overlap
   `wcr >= tau` by construction (schema-side safety net for the pre-filter).
