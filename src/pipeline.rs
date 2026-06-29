@@ -1064,7 +1064,7 @@ pub fn run_allele_call(
             .collect();
         let raw_count = raw_results.len();
         // Step 1: Cluster filter — only keep hits where CDS clusters with the representative.
-        let seq_num_cluster = 30;
+        let seq_num_cluster = config.max_targets;
         let mut cluster_cache: FxHashMap<usize, Vec<usize>> = FxHashMap::default();
         let cluster_filtered: Vec<_> = raw_results
             .into_iter()

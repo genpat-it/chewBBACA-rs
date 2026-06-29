@@ -116,6 +116,10 @@ Minimizer pre-filter (Phase 4 candidate selection):
                                       (see below).
       --minimizer-order <ORDER>       Minimizer ordering: "hash" (FNV-1a, default,
                                       deterministic) or "lexicographic" (chewBBACA-style)
+      --max-targets <N>               Top-K candidate representatives per query passed
+                                      to Smith-Waterman, ranked by shared minimizers
+                                      [default: 30, matching chewBBACA]. 0 = unbounded.
+                                      Sweep offline with schema_audit_pareto (--kappa-values)
       --brute-residual                Safety net: bypass the minimizer pre-filter and
                                       score residual CDS against all representatives
                                       (eliminates filter-induced misses, at higher cost)

@@ -162,6 +162,7 @@ pub struct Config {
     pub minimizer_k: usize,             // minimizer k-mer size (default 5)
     pub minimizer_w: usize,             // minimizer window size (default 5)
     pub minimizer_threshold: f64,       // minimum shared minimizer fraction (default 0.2)
+    pub max_targets: usize,             // top-K candidate cap per query (default 30; 0 = unbounded)
     pub use_prodigal_ffi: bool,         // use libprodigal FFI instead of subprocess
     pub brute_residual: bool, // bypass minimizer pre-filter, align residuals against all reps
     pub lexicographic_minimizers: bool, // fast mode: use lexicographic (compat) minimizer ordering instead of FNV-1a hash
@@ -185,6 +186,7 @@ impl Default for Config {
             minimizer_k: 5,
             minimizer_w: 5,
             minimizer_threshold: 0.2,
+            max_targets: 30,
             use_prodigal_ffi: false,
             brute_residual: false,
             lexicographic_minimizers: false,

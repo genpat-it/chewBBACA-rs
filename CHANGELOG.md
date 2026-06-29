@@ -20,6 +20,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   pre-filter and scores residual CDS against all representatives.
 - `--minimizer-order {hash,lexicographic}`: select FNV-1a hash (default) or
   chewBBACA-style lexicographic minimizer ordering (for determinism studies).
+- `--max-targets <N>`: configurable top-K candidate cap per query (default 30,
+  matching chewBBACA; 0 = unbounded). Previously hardcoded to 30; the default is
+  unchanged, so existing results are bit-identical. Pairs with the offline
+  `schema_audit_pareto --kappa-values` sweep.
 
 ### Changed
 - `schema_audit`: corrected terminology — the per-locus statistic is the

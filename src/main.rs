@@ -105,6 +105,11 @@ struct Cli {
     #[arg(long, default_value = "0.2")]
     minimizer_threshold: f64,
 
+    /// Maximum candidate representatives per query passed to Smith-Waterman, ranked by
+    /// shared minimizers (top-K; default: 30, matching chewBBACA v3.5.4). 0 = unbounded.
+    #[arg(long, default_value = "30")]
+    max_targets: usize,
+
     /// Residual safety net: bypass the minimizer pre-filter and align each unmatched
     /// CDS against all representatives. Eliminates filter-induced misses (equivalent to
     /// chewBBACA's exhaustive per-locus comparison) at higher cost. Off by default.
@@ -161,6 +166,7 @@ fn main() {
         minimizer_k: cli.minimizer_k,
         minimizer_w: cli.minimizer_w,
         minimizer_threshold: cli.minimizer_threshold,
+        max_targets: cli.max_targets,
         use_prodigal_ffi: cli.prodigal_ffi,
         brute_residual: cli.brute_residual,
         lexicographic_minimizers: match cli.minimizer_order.as_str() {
