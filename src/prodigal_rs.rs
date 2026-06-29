@@ -3144,7 +3144,7 @@ mod tests {
                 genome.file_stem().unwrap().to_str().unwrap()
             );
 
-            let c_result = Command::new(prodigal)
+            let c_result = Command::new(&prodigal)
                 .args(&[
                     "-i",
                     genome.to_str().unwrap(),
