@@ -44,7 +44,21 @@ CUDA_HOME=/usr/local/cuda cargo build --release
 LD_LIBRARY_PATH=/path/to/parasail/build ./target/release/chewcall [OPTIONS]
 ```
 
-The binaries are at `target/release/chewcall` and `target/release/schema_audit`.
+The build produces four binaries in `target/release/`: `chewcall` (allele
+caller), `schema_audit` (per-locus minimizer-overlap audit), `schema_audit_pareto`
+(parameter sweep) and `constructive_remedy` (schema enrichment).
+
+### Docker
+
+A prebuilt image (parasail + chewcall, CPU/SIMD) is published on the GitHub
+Container Registry, so no local build is required:
+
+```bash
+docker pull ghcr.io/genpat-it/chewcall:0.3.0
+docker run --rm ghcr.io/genpat-it/chewcall:0.3.0 --help
+docker run --rm -v "$PWD":/data ghcr.io/genpat-it/chewcall:0.3.0 \
+    -i /data/genomes -g /data/schema -o /data/out --cpu 8 --cds-input /data/cds
+```
 
 ## Usage
 
@@ -98,6 +112,11 @@ Minimizer pre-filter (Phase 4 candidate selection):
                                       under-represented in the short/ subdirectory;
                                       run schema_audit first to identify them
                                       (see below).
+      --minimizer-order <ORDER>       Minimizer ordering: "hash" (FNV-1a, default,
+                                      deterministic) or "lexicographic" (chewBBACA-style)
+      --brute-residual                Safety net: bypass the minimizer pre-filter and
+                                      score residual CDS against all representatives
+                                      (eliminates filter-induced misses, at higher cost)
 
 Alignment backend:
       --mode <MODE>                   Alignment mode: "fast" (parasail SIMD) or
@@ -151,6 +170,29 @@ column. The summary on stderr suggests either lowering `--minimizer-threshold`
 for the next chewcall run or — preferably — expanding the representative set.
 `--exclude-inferred` skips `*N`-prefixed alleles, which are by construction
 outliers and rarely appear as actual query CDS.
+
+### Sweeping parameters (`schema_audit_pareto`)
+
+`schema_audit_pareto` sweeps a grid of `(k, w, τ, κ)` values and reports, per
+tuple, the number of flagged loci and a proxy for per-query scoring work, marking
+the Pareto-optimal operating points (fewer flagged loci AND less work):
+
+```bash
+schema_audit_pareto -g /path/to/schema \
+    --k-values 4,5,6 --w-values 3,5,7 --tau-values 0.15,0.20,0.25 \
+    --kappa-values 5,10,30,0 --cpu 8 --exclude-inferred -o pareto.tsv
+```
+
+### Making a schema filter-safe (`constructive_remedy`)
+
+`constructive_remedy` promotes witness alleles to representatives so that every
+locus attains worst-case minimizer overlap `wcr ≥ τ` **by construction**,
+writing an enriched schema and a per-locus report:
+
+```bash
+constructive_remedy -g /path/to/schema -o /path/to/schema_enriched \
+    --k 5 --w 5 --threshold 0.20 --cpu 8 --exclude-inferred
+```
 
 ### CDS prediction modes
 
