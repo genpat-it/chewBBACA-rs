@@ -10,6 +10,8 @@ A high-performance allele caller for cgMLST/wgMLST schemas, inspired by and comp
 
 On 8 BeONE benchmark datasets (~28.7 M callable cells under a shared pre-computed CDS protocol), chewcall runs **10.7–22.3× faster** than chewBBACA v3.5.4 while preserving **100 % DNA-sequence agreement** on bilaterally callable cells.
 
+> **Not affiliated with chewBBACA.** chewcall is an independent reimplementation of the chewBBACA AlleleCall algorithm; it is **not** affiliated with, nor endorsed by, the chewBBACA authors. It is offered as a compatible complement to — not a replacement for — [chewBBACA](https://github.com/B-UMMI/chewBBACA), to whose developers full credit for the original algorithm and schema ecosystem is due.
+
 ## Installation
 
 ### Requirements
