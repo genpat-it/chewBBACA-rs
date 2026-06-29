@@ -1,6 +1,6 @@
 cff-version: 1.2.0
 message: "If you use chewcall, please cite the software (and the accompanying article once available)."
-title: "chewcall: accelerating the chewBBACA allele calling pipeline with minimizer-filtered exact Smith-Waterman alignment"
+title: "chewcall: fast exact Smith-Waterman allele calling with a schema-side filter audit for cgMLST/wgMLST"
 type: software
 version: "0.3.0"
 date-released: "2026-06-27"
@@ -28,7 +28,7 @@ keywords:
   - genomic surveillance
 preferred-citation:
   type: article
-  title: "chewcall: accelerating the chewBBACA allele calling pipeline with minimizer-filtered exact Smith-Waterman alignment"
+  title: "chewcall: fast exact Smith-Waterman allele calling with a schema-side filter audit for cgMLST/wgMLST"
   year: 2026
   authors:
     - family-names: "de Ruvo"
