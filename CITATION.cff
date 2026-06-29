@@ -11,13 +11,13 @@ authors:
     given-names: "Andrea"
     orcid: "https://orcid.org/0000-0001-6836-3455"
     affiliation: "Gran Sasso Science Institute, L'Aquila, Italy; Istituto Zooprofilattico Sperimentale dell'Abruzzo e del Molise \"G. Caporale\", Teramo, Italy"
-  - family-names: "Radomski"
-    given-names: "Nicolas"
-    orcid: "https://orcid.org/0000-0002-7480-4197"
-    affiliation: "Istituto Zooprofilattico Sperimentale dell'Abruzzo e del Molise \"G. Caporale\", Teramo, Italy"
   - family-names: "Di Pasquale"
     given-names: "Adriano"
     orcid: "https://orcid.org/0000-0002-9328-3972"
+    affiliation: "Istituto Zooprofilattico Sperimentale dell'Abruzzo e del Molise \"G. Caporale\", Teramo, Italy"
+  - family-names: "Radomski"
+    given-names: "Nicolas"
+    orcid: "https://orcid.org/0000-0002-7480-4197"
     affiliation: "Istituto Zooprofilattico Sperimentale dell'Abruzzo e del Molise \"G. Caporale\", Teramo, Italy"
 keywords:
   - cgMLST
@@ -33,7 +33,7 @@ preferred-citation:
   authors:
     - family-names: "de Ruvo"
       given-names: "Andrea"
-    - family-names: "Radomski"
-      given-names: "Nicolas"
     - family-names: "Di Pasquale"
       given-names: "Adriano"
+    - family-names: "Radomski"
+      given-names: "Nicolas"
