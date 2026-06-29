@@ -3,7 +3,7 @@
 All notable changes to chewcall are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
-## [0.3.0] - 2026-06-27
+## [0.3.0] - 2026-06-29
 
 ### Added
 - Docker image (multi-stage build of parasail + chewcall, CPU/SIMD) and a

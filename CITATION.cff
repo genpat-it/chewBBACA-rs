@@ -3,7 +3,7 @@ message: "If you use chewcall, please cite the software (and the accompanying ar
 title: "chewcall: fast, chewBBACA-compatible cgMLST/wgMLST allele calling with exact Smith-Waterman and a schema-side filter audit"
 type: software
 version: "0.3.0"
-date-released: "2026-06-27"
+date-released: "2026-06-29"
 license: GPL-3.0-or-later
 repository-code: "https://github.com/genpat-it/chewcall"
 authors:
