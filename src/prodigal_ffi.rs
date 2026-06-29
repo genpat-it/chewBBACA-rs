@@ -3,6 +3,12 @@
 //! Each rayon worker thread gets its own `ProdigalCtx` via `thread_local!`,
 //! avoiding both subprocess overhead and thread-safety issues.
 
+// The real FFI implementation is compiled only when libprodigal.a was found at
+// build time (build.rs sets cfg(have_prodigal)); otherwise a stub run_ffi is
+// provided so chewcall builds and runs without libprodigal (default predictor
+// is the pure-Rust prodigal-rs).
+#[cfg(have_prodigal)]
+mod imp {
 use std::cell::RefCell;
 use std::ffi::CString;
 use std::os::raw::{c_char, c_int};
@@ -161,4 +167,22 @@ pub fn run_ffi(
         let (data, _num_genes) = ctx.run_file_with_seqs(genome_path)?;
         Ok(data)
     })
+}
+} // mod imp
+
+#[cfg(have_prodigal)]
+pub use imp::run_ffi;
+
+/// Stub used when chewcall is built without libprodigal (the FFI is optional;
+/// prodigal-rs is the default CDS predictor). Returns an actionable error if a
+/// user explicitly requests --prodigal-ffi.
+#[cfg(not(have_prodigal))]
+pub fn run_ffi(
+    _genome_path: &std::path::Path,
+    _training_file: &std::path::Path,
+    _translation_table: u8,
+) -> Result<Vec<u8>, String> {
+    Err("chewcall was built without the prodigal FFI (libprodigal.a not found at build time). \
+         Use the default prodigal-rs predictor, --cds-input, or --prodigal-path."
+        .to_string())
 }

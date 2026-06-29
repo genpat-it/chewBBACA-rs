@@ -1,0 +1,16 @@
+target/
+paper_gm/
+paper_wabi2026/
+paper_wabi2026_v2/
+paper_wabi2026_v3/
+chewbbacca_paper/
+wabi2025/
+slides_direzione_chewcall/
+*.tar.gz
+.git/
+**/__pycache__/
+**/*.pyc
+*.pdf
+*.log
+beone_benchmark/
+Salmonella_enterica_wgMLST_clean/
