@@ -13,7 +13,7 @@
 //! (n_flagged, sw_work_proxy) — fewer flagged loci AND less SW work, both
 //! minimized.
 //!
-//! κ (the top-K candidate cap, `--max-targets` in chewcall's cluster stage)
+//! κ (the top-K candidate cap, fixed at 30 in chewcall's cluster stage)
 //! does NOT change best-match recall under the per-locus audit model: the
 //! highest-MO representative of a locus is always rank 1 and always survives a
 //! top-κ truncation for κ ≥ 1. κ therefore only bounds SW work here; its
