@@ -5,8 +5,8 @@ this directory.  The naming convention is
 
     NN_{kind}_{paper-artefact-name}.{ext}
 
-so `04_tables_runtime_concordance.py` produces Tables 1--4, while
-`05_table_clustering.py` produces Table 7 and so on.
+so `04_tables_runtime_concordance.py` produces Tables 1--3, while
+`05_table_clustering.py` produces Table 6 and so on.
 
 ## One-click reproduction (Makefile)
 
@@ -34,12 +34,14 @@ paper/reproduce/
 ├── 01_run_chewcall_BeONE.sh               ← chewcall on 8 BeONE datasets (shcds + e2e × 3 reps)
 ├── 02_run_chewbbaca_BeONE.sh              ← chewBBACA v3.5.4 / v3.3.10 references
 ├── 03_run_FDA_outbreak.sh                 ← chewcall + chewBBACA on the 4 FDA outbreak datasets
-├── 04_tables_runtime_concordance.py       ← Tables 1, 2 (shcds) and 3, 4 (e2e)
-├── 05_table_clustering.py                 ← Table 7 (cgMLST clustering)
-├── 06_figure2_discordance_anatomy.py      ← Figure 2 (heat-map LaTeX block)
+├── 04_tables_runtime_concordance.py       ← Tables 1, 2 (shcds) and 3 (e2e runtime; e2e concordance folds into Table 2)
+├── 05_table_clustering.py                 ← Table 6 (cgMLST clustering)
+├── 06_figure2_discordance_anatomy.py      ← Figure 3 (heat-map LaTeX block)
 ├── 07_supp_S3_classification_transitions.py  ← Supplementary Tables S3 + S4
 ├── 08_supp_S2_pyrodigal_equivalence.py    ← Supplementary Section S2 paragraph
 ├── 09_table_cgmlst_split.py               ← Table 5 (cgMLST/wgMLST actionable split)
+├── 14_supp_diagnostic_cases.py            ← Supplementary Table S5 (actionable mechanism breakdown + sample)
+├── 16_ablation_speedup.sh                 ← Supplementary Table S7 (speedup decomposition: fast/compatible/brute)
 └── README.md                              ← this file
 ```
 
@@ -66,13 +68,14 @@ Tools required on `PATH`:
 | Artefact (label / caption) | Section | Reproduce with |
 |---|---|---|
 | **Table 1** (`tab:runtime`) — shared-CDS runtime | Results §Performance | `python 04_tables_runtime_concordance.py --mode shcds` |
-| **Table 2** (`tab:concordance`) — shared-CDS CRC32 concordance | Results §Performance | `python 04_tables_runtime_concordance.py --mode shcds` |
+| **Table 2** (`tab:concordance`) — CRC32 concordance (shared-CDS & end-to-end) | Results §Performance | `python 04_tables_runtime_concordance.py --mode shcds` (and `--mode e2e`; both give 0 diffs) |
 | **Table 3** (`tab:runtime_e2e`) — end-to-end runtime | Results §Performance | `python 04_tables_runtime_concordance.py --mode e2e` |
-| **Table 4** (`tab:concordance_e2e`) — end-to-end CRC32 | Results §Performance | `python 04_tables_runtime_concordance.py --mode e2e` |
-| **Figure 2** (`fig:discordance_anatomy`) — discordance heat-map | Results §Analysis of differences | `python 06_figure2_discordance_anatomy.py` |
+| **Figure 3** (`fig:discordance_anatomy`) — discordance heat-map | Results §Analysis of differences | `python 06_figure2_discordance_anatomy.py` |
 | **Table 5** (`tab:cgmlst_split`) — cgMLST/wgMLST actionable split | Results §Analysis of differences | `python 09_table_cgmlst_split.py` |
-| **Table 7** (`tab:clustering`) — cgMLST pairwise clustering | Results §Downstream concordance | `python 05_table_clustering.py` |
-| **Table 8** (`tab:outbreak`) — FDA outbreak reconstruction | Results §Downstream concordance | manual; inputs are produced by `03_run_FDA_outbreak.sh`, downstream MST / single-linkage clustering uses SciPy `minimum_spanning_tree` and `linkage`/`fcluster` (Implementation §iii) |
+| **Suppl Table S5** — actionable mechanism breakdown + sample | Supplementary §S5 | `python 14_supp_diagnostic_cases.py` |
+| **Suppl Table S7** — speedup decomposition (runtime ablation) | Supplementary §S7 | `bash 16_ablation_speedup.sh` (needs `BLASTP=path/to/blastp`) |
+| **Table 6** (`tab:clustering`) — cgMLST pairwise clustering | Results §Downstream concordance | `python 05_table_clustering.py` |
+| **Table 7** (`tab:outbreak`) — FDA outbreak reconstruction | Results §Downstream concordance | manual; inputs are produced by `03_run_FDA_outbreak.sh`, downstream MST / single-linkage clustering uses SciPy `minimum_spanning_tree` and `linkage`/`fcluster` (Implementation §iii) |
 | **Suppl Section S2** — pyrodigal equivalence | Supplementary | `python 08_supp_S2_pyrodigal_equivalence.py --genome ...` |
 | **Suppl Section S2** — concordance with v3.3.10 | Supplementary | derived from `04_tables_runtime_concordance.py` (vs 3.3.10 columns) |
 | **Suppl Table S3** (`tab-S3`) — classification transitions | Supplementary | `python 07_supp_S3_classification_transitions.py` (S3 block) |

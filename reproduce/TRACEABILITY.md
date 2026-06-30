@@ -37,6 +37,7 @@ Protocol notes:
 | Determinism (hash vs lexicographic) | `make determinism` | 0 diff / 2,472,326 (Lm) | ✅ |
 | GPU vs CPU | `make gpu` | 0 diff / 2,472,326 (Lm) | ✅ |
 | Pareto `(k,w,τ,κ)` | `make pareto` | κ=30 Pareto-dominated on all 4 schemas | ✅ |
+| **Suppl Table S7** — speedup decomposition | `16_ablation_speedup.sh` | Lm cons: fast ~15s / compatible (BLASTp) 230s / brute-residual >1h; aligner ~15.3×, architecture ~1.3×, total ~20× | ✅ |
 
 ## Bottom line
 With `config.sh` pointed at the data root, the headline correctness tables (concordance Tab 2, actionable Tab 5) and the supplementary tables/figures regenerate and **match the paper exactly**. Runtime figures (Tables 1/3) are machine-dependent; all correctness results are exact.
